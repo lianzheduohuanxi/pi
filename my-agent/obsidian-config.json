@@ -1,0 +1,10 @@
+{
+  "vaultPath": "~/obsidian-vault",
+  "dailyNoteFolder": "Daily Notes",
+  "categories": {
+    "diet": { "label": "饮食", "emoji": "🍽️" },
+    "exercise": { "label": "运动", "emoji": "🏃" },
+    "learning": { "label": "学习", "emoji": "📚" },
+    "work": { "label": "工作", "emoji": "💼" }
+  }
+}
