@@ -17,8 +17,13 @@
     "defaultOutputFormat": "daily",
     "defaultCategory": "work"
   },
+  "visualization": {
+    "enabled": true,
+    "defaultDays": 7,
+    "defaultType": "bar"
+  },
   "_meta": {
-    "version": 2,
+    "version": 3,
     "lastUpdated": "2026-05-27",
     "note": "此配置文件供 AI Agent 使用，AI 应从此文件读取笔记库路径，而非硬编码或猜测"
   }
