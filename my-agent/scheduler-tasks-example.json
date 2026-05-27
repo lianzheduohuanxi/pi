@@ -1,0 +1,25 @@
+[
+  {
+    "id": "task_mpmevxcd_lm71",
+    "name": "每日晨间任务提醒",
+    "cron": "0 8 * * 1-5",
+    "prompt": "先使用 obsidian_show_config 确认笔记库路径，然后尝试读取 30-Growth/todo-list.md 和 40-Life/_personal.md。如果文件不存在，告知用户需要先创建这些文件。如果文件存在，了解待办任务和个人信息，生成今日任务摘要：\n1. 今日日期和星期\n2. 待办任务列表\n3. 重要提醒",
+    "outputToObsidian": false,
+    "obsidianCategory": "work",
+    "notifyOnComplete": true,
+    "enabled": true,
+    "createdAt": "2026-05-26T09:07:08.557Z"
+  },
+  {
+    "id": "task_mpmevxci_85ko",
+    "name": "每日周记更新",
+    "cron": "0 17 * * *",
+    "prompt": "先使用 obsidian_show_config 确认笔记库路径，然后回顾今天的工作内容。使用 obsidian_read 读取今日每日笔记，提取工作、学习、生活等方面的重要进展和事项，生成今日总结。",
+    "outputToObsidian": true,
+    "obsidianCategory": "work",
+    "obsidianOutputFormat": "weekly",
+    "notifyOnComplete": true,
+    "enabled": true,
+    "createdAt": "2026-05-26T09:07:08.562Z"
+  }
+]

@@ -1,0 +1,16 @@
+{
+  "vaultPath": "C:\\program1\\恋着多欢喜",
+  "dailyNoteFolder": "Daily Notes",
+  "categories": {
+    "diet": { "label": "饮食", "emoji": "🍽️" },
+    "exercise": { "label": "运动", "emoji": "🏃" },
+    "learning": { "label": "学习", "emoji": "📚" },
+    "work": { "label": "工作", "emoji": "💼" }
+  },
+  "template": "",
+  "_meta": {
+    "version": 1,
+    "lastUpdated": "2026-05-26",
+    "note": "此配置文件供 AI Agent 使用，AI 应从此文件读取笔记库路径，而非硬编码或猜测"
+  }
+}
