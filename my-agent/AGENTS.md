@@ -1,34 +1,177 @@
-# 全局上下文
+# 技术配置与工具手册
 
-## 个人信息
-- 语言偏好: 中文
-- 笔记系统: Obsidian
-- 操作系统: Windows
+## 环境信息
+- **语言**: 中文
+- **笔记系统**: Obsidian
+- **操作系统**: Windows
 
-## Obsidian 笔记库
+---
+
+## 核心系统
+
+### Obsidian 配置
 - **配置文件**: `~/.pi/agent/obsidian-config.json`
-- **路径读取方式**: Agent 通过 `obsidian_show_config` 工具读取配置文件中的 vaultPath，**不依赖文档中的硬编码路径**
-- **配置工具**: 使用 `/obsidian-setup` 命令或 `obsidian_config` 工具设置笔记库路径
-- 每日笔记格式: YYYY-MM-DD.md，存放在 `Daily Notes` 文件夹
-- 分类: 饮食(diet)、运动(exercise)、学习(learning)、工作(work)
-- ⚠️ **重要**: 所有 Obsidian 操作必须使用 `obsidian_read`、`obsidian_write`、`obsidian_search`、`obsidian_list`、`obsidian_record` 等专用工具，这些工具会自动从配置文件读取正确的 vaultPath，**禁止使用通用的 `edit`、`read` 等工具直接操作笔记库文件**
+- **读取配置**: 使用 `obsidian_show_config` 工具读取配置
+- **设置配置**: 使用 `obsidian_config` 工具或 `/obsidian-setup` 命令
+- **每日笔记**: YYYY-MM-DD.md，存在 `Daily Notes` 文件夹
+- **分类**: diet, exercise, learning, work, mood, health, finance
+- **重要**: 所有 Obsidian 操作必须使用 `obsidian_*` 专用工具，不要用通用文件工具
 
-## 定时任务
-- 任务定义存储在 ~/.pi/agent/scheduler/tasks.json
-- Windows: 使用 Windows Task Scheduler (schtasks) 执行定时任务
-- Linux/macOS: 使用系统 crontab 执行定时任务
-- 运行脚本在 ~/.pi/agent/scheduler/run-task.mjs
-- Windows 批处理包装在 ~/.pi/agent/scheduler/run-task.bat
-- 可通过 PI_BIN 环境变量指定 pi 命令路径
-- Windows 上支持的 cron 模式:
-  - `*/5 * * * *` 每 N 分钟
-  - `0 */2 * * *` 每 N 小时
-  - `0 9 * * *` 每天 9:00
-  - `0 9 * * 1-5` 工作日 9:00
-  - `0 9 * * 1` 每周一 9:00
-  - `0 9 1 * *` 每月 1 号 9:00
-- Windows 上创建任务可能需要管理员权限
+---
 
-## 常用命令
-- `/obsidian-setup` - 配置 Obsidian 笔记库路径
-- `/tasks` - 管理定时任务
+## 定时任务系统
+- **任务存储**: `~/.pi/agent/scheduler/tasks.json`
+- **Windows**: Task Scheduler (schtasks)
+- **Linux/macOS**: crontab
+- **运行脚本**: `~/.pi/agent/scheduler/run-task.mjs`
+- **Windows 批处理**: `~/.pi/agent/scheduler/run-task.bat`
+- **环境变量**: PI_BIN 指定 pi 命令路径
+
+---
+
+## 扩展列表
+
+### 1️⃣ 快速记录系统 ([quicklog.ts](file:///workspace/my-agent/extensions/quicklog.ts))
+| 工具 | 用途 |
+|------|------|
+| `quicklog` | 一句话快速记录 |
+| `quicklog_streaks` | 查看连续记录 |
+| `quicklog_achievements` | 查看成就 |
+
+**表情映射**:
+- 😊😢😰😠 → mood
+- 🏃💪 → exercise
+- 📚 → learning
+- 💼 → work
+- 🍽️☕ → diet
+- 💤💊 → health
+- 💰 → finance
+
+**关键词自动分类**:
+- 吃、饭、咖啡 → diet
+- 运动、跑步、健身 → exercise
+- 学习、读书 → learning
+- 工作 → work
+- 开心、难过 → mood
+- 睡、困 → health
+- 买、花 → finance
+
+---
+
+### 2️⃣ 每日复盘引擎 ([dailyreview.ts](file:///workspace/my-agent/extensions/dailyreview.ts))
+| 工具 | 用途 |
+|------|------|
+| `daily_review` | 每日复盘 |
+| `weekly_keynote` | 每周回顾 |
+
+---
+
+### 3️⃣ 复利知识库 ([knowledge.ts](file:///workspace/my-agent/extensions/knowledge.ts))
+| 工具 | 用途 |
+|------|------|
+| `knowledge_scan` | 扫描并索引笔记 |
+| `knowledge_search` | 搜索知识 |
+| `knowledge_related` | 相关笔记 |
+| `knowledge_stats` | 知识统计 |
+
+---
+
+### 4️⃣ Obsidian 基础 ([obsidian.ts](file:///workspace/my-agent/extensions/obsidian.ts))
+| 工具 | 用途 |
+|------|------|
+| `obsidian_record` | 记录条目 |
+| `obsidian_read` | 读取笔记 |
+| `obsidian_write` | 写入笔记 |
+| `obsidian_search` | 搜索笔记 |
+| `obsidian_list` | 列出内容 |
+| `obsidian_config` | 配置路径 |
+| `obsidian_show_config` | 查看配置 |
+| `obsidian_summary` | 摘要 |
+| `obsidian_statistics` | 统计 |
+| `obsidian_visualize` | 可视化 |
+| `obsidian_analyze` | 分析建议 |
+| `obsidian_report` | 周报/月报 |
+
+---
+
+### 5️⃣ 定时任务 ([scheduler.ts](file:///workspace/my-agent/extensions/scheduler.ts))
+| 工具 | 用途 |
+|------|------|
+| `scheduler_create` | 创建任务 |
+| `scheduler_list` | 列出任务 |
+| `scheduler_delete` | 删除任务 |
+| `scheduler_run` | 立即运行 |
+| `scheduler_toggle` | 启用/禁用 |
+| `scheduler_update` | 更新配置 |
+| `scheduler_history` | 历史记录 |
+
+---
+
+### 6️⃣ 智能提醒 ([reminder.ts](file:///workspace/my-agent/extensions/reminder.ts))
+| 工具 | 用途 |
+|------|------|
+| `reminder_list` | 列出提醒 |
+| `reminder_create` | 创建提醒 |
+| `reminder_toggle` | 启用/禁用 |
+| `reminder_delete` | 删除提醒 |
+| `reminder_check` | 检查触发 |
+
+---
+
+## 命令列表
+
+| 命令 | 用途 |
+|------|------|
+| `/obsidian-setup` | 设置 Obsidian |
+| `/tasks` | 管理定时任务 |
+| `/log` | 快速记录 |
+| `/kb` | 知识库管理 |
+
+---
+
+## 目录结构
+
+```
+~/.pi/agent/
+├── obsidian-config.json    # Obsidian 配置
+├── scheduler/
+│   ├── tasks.json         # 定时任务
+│   ├── run-task.mjs       # 运行脚本
+│   └── run-task.bat       # Windows 批处理
+├── quicklog/
+│   ├── achievements.json  # 成就数据
+│   └── streaks.json       # 连续记录
+├── knowledge/
+│   └── kb.json          # 知识库索引
+└── reviews/              # 复盘历史
+```
+
+---
+
+## 技能系统
+
+### Obsidian 分类技能
+- [obsidian-diet - 饮食记录]
+- [obsidian-exercise - 运动记录]
+- [obsidian-learning - 学习记录]
+- [obsidian-work - 工作记录]
+- [obsidian-mood - 心情记录]
+- [obsidian-health - 健康记录]
+- [obsidian-finance - 财务记录]
+
+---
+
+## Prompt 模板
+
+- [daily-summary.md](file:///workspace/my-agent/prompts/daily-summary.md) - 每日总结提示词
+- [weekly-review.md](file:///workspace/my-agent/prompts/weekly-review.md) - 每周回顾提示词
+
+---
+
+## 数据文件说明
+
+- **quicklog 数据**: `~/.pi/agent/quicklog/`
+- **achievements.json**: 成就解锁状态
+- **streaks.json**: 分类连续记录天数
+- **knowledge/kb.json**: 知识库索引
+- **reviews/**: 每日复盘历史
