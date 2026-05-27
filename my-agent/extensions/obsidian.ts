@@ -45,6 +45,15 @@ function loadConfig(): ObsidianConfig {
 	return DEFAULT_CONFIG;
 }
 
+function getWeekNumber(date: Date): { year: number; week: number } {
+	const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+	const dayNum = d.getUTCDay() || 7;
+	d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+	const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+	const week = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+	return { year: d.getUTCFullYear(), week };
+}
+
 function saveConfig(config: ObsidianConfig): void {
 	mkdirSync(join(homedir(), ".pi", "agent"), { recursive: true });
 	writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
@@ -598,6 +607,108 @@ export default function (pi: ExtensionAPI) {
 					},
 				],
 			};
+		},
+	});
+
+	pi.registerTool({
+		name: "obsidian_summary",
+		label: "Obsidian Summary",
+		description: "Generate a summary of notes from a date range or category.",
+		promptSnippet: "generate a summary of notes",
+		parameters: Type.Object({
+			category: Type.Optional(Type.String({ description: "Category to summarize (optional)" })),
+			startDate: Type.Optional(Type.String({ description: "Start date (YYYY-MM-DD, default: 7 days ago)" })),
+			endDate: Type.Optional(Type.String({ description: "End date (YYYY-MM-DD, default: today)" })),
+		}),
+		async execute(_id, params) {
+			const vaultPath = config.vaultPath;
+			const vaultCheck = checkVault(vaultPath);
+			if (vaultCheck) return vaultCheck;
+
+			const today = new Date();
+			const start = params.startDate ? new Date(params.startDate) : new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+			const end = params.endDate ? new Date(params.endDate) : today;
+
+			const summaries: string[] = [];
+			let current = new Date(start);
+
+			while (current <= end) {
+				const dateStr = current.toISOString().split('T')[0];
+				const notePath = getDailyNotePath(config, dateStr);
+				
+				if (existsSync(notePath)) {
+					const content = readFileSync(notePath, 'utf-8');
+					
+					if (params.category) {
+						const catConfig = config.categories[params.category];
+						const sectionLabel = catConfig ? catConfig.label : params.category;
+						const sectionMatch = content.match(new RegExp(`##.*${sectionLabel}[^#]*`, 's'));
+						if (sectionMatch) {
+							summaries.push(`${dateStr} (${sectionLabel}):\n${sectionMatch[0].trim()}`);
+						}
+					} else {
+						summaries.push(`${dateStr}:\n${content.trim().substring(0, 500)}...`);
+					}
+				}
+				
+				current.setDate(current.getDate() + 1);
+			}
+
+			if (summaries.length === 0) {
+				return { content: [{ type: "text", text: "No notes found in the specified date range." }] };
+			}
+
+			return { content: [{ type: "text", text: `Summary of ${summaries.length} note(s):\n\n${summaries.join('\n\n---\n\n')}` }] };
+		},
+	});
+
+	pi.registerTool({
+		name: "obsidian_statistics",
+		label: "Obsidian Statistics",
+		description: "Get statistics about your notes, such as entry counts by category.",
+		promptSnippet: "get statistics about notes",
+		parameters: Type.Object({
+			days: Type.Optional(Type.Number({ description: "Number of days to analyze (default: 30)" })),
+		}),
+		async execute(_id, params) {
+			const vaultPath = config.vaultPath;
+			const vaultCheck = checkVault(vaultPath);
+			if (vaultCheck) return vaultCheck;
+
+			const days = params.days || 30;
+			const today = new Date();
+			const stats: Record<string, number> = {};
+
+			for (const cat of Object.keys(config.categories)) {
+				stats[cat] = 0;
+			}
+
+			for (let i = 0; i < days; i++) {
+				const date = new Date(today.getTime() - i * 24 * 60 * 60 * 1000);
+				const dateStr = date.toISOString().split('T')[0];
+				const notePath = getDailyNotePath(config, dateStr);
+				
+				if (existsSync(notePath)) {
+					const content = readFileSync(notePath, 'utf-8');
+					for (const [key, cat] of Object.entries(config.categories)) {
+						const sectionMatch = content.match(new RegExp(`##.*${cat.label}`, 's'));
+						if (sectionMatch) {
+							const entries = sectionMatch[0].match(/^- \d{2}:\d{2}/gm);
+							stats[key] += entries ? entries.length : 0;
+						}
+					}
+				}
+			}
+
+			let statsText = `📊 Note Statistics (Last ${days} days):\n\n`;
+			for (const [key, count] of Object.entries(stats)) {
+				const cat = config.categories[key];
+				if (cat) {
+					statsText += `${cat.emoji} ${cat.label}: ${count} entries\n`;
+				}
+			}
+
+			return { content: [{ type: "text", text: statsText }] };
 		},
 	});
 
