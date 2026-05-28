@@ -7,13 +7,15 @@ import {
 	mkdirSync,
 	unlinkSync,
 	readdirSync,
+	appendFileSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, resolve, dirname } from "node:path";
 import { homedir } from "node:os";
 
 const isWindows = process.platform === "win32";
 const SCHEDULER_DIR = join(homedir(), ".pi", "agent", "scheduler");
 const TASKS_FILE = join(SCHEDULER_DIR, "tasks.json");
+const HISTORY_FILE = join(SCHEDULER_DIR, "history.json");
 const RUNNER_SCRIPT = join(SCHEDULER_DIR, "run-task.mjs");
 const RUNNER_BAT = join(SCHEDULER_DIR, "run-task.bat");
 const LOCK_FILE = join(SCHEDULER_DIR, ".lock");
@@ -27,27 +29,51 @@ interface ScheduledTask {
 	obsidianCategory?: string;
 	obsidianOutputFormat?: "daily" | "weekly" | "custom";
 	obsidianOutputPath?: string;
+	obsidianWeeklyFolder?: string;
 	notifyOnComplete?: boolean;
 	enabled: boolean;
 	createdAt: string;
 }
 
-function loadTasks(): ScheduledTask[] {
-	if (!existsSync(TASKS_FILE)) return [];
-	try {
-		return JSON.parse(readFileSync(TASKS_FILE, "utf-8"));
-	} catch {
-		return [];
+interface TaskHistory {
+	taskId: string;
+	taskName: string;
+	timestamp: string;
+	status: "success" | "failed";
+	exitCode: number;
+	output?: string;
+	error?: string;
+	durationMs: number;
+}
+
+// ============================================
+// 共享工具函数 - 主文件和运行器脚本共用
+// ============================================
+
+function loadConfig() {
+	const configPath = join(homedir(), ".pi", "agent", "obsidian-config.json");
+	if (existsSync(configPath)) {
+		try {
+			return JSON.parse(readFileSync(configPath, "utf-8"));
+		} catch {
+			// ignore
+		}
 	}
+	return {
+		vaultPath: join(homedir(), "obsidian-vault"),
+		dailyNoteFolder: "Daily Notes",
+		weeklyNoteFolder: "40-Life/weekly",
+		categories: {},
+	};
 }
 
-function saveTasks(tasks: ScheduledTask[]): void {
-	mkdirSync(SCHEDULER_DIR, { recursive: true });
-	writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2), "utf-8");
-}
-
-function generateId(): string {
-	return `task_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+function getWeekNumber(date: Date): { year: number; week: number } {
+	const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+	const dayNum = d.getUTCDay() || 7;
+	d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+	const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+	const week = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+	return { year: d.getUTCFullYear(), week };
 }
 
 function acquireLock(): boolean {
@@ -73,13 +99,104 @@ function releaseLock(): void {
 	} catch {}
 }
 
-function getWeekNumber(date: Date): { year: number; week: number } {
-	const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-	const dayNum = d.getUTCDay() || 7;
-	d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-	const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-	const week = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
-	return { year: d.getUTCFullYear(), week };
+function saveToObsidian(
+	output: string,
+	task: ScheduledTask,
+	now: Date,
+): string | null {
+	const config = loadConfig();
+	const vaultPath = config.vaultPath || join(homedir(), "obsidian-vault");
+	const dailyFolder = config.dailyNoteFolder || "Daily Notes";
+	const date = now.toISOString().split("T")[0];
+
+	let category = task.obsidianCategory || "work";
+	const catConfig = config.categories?.[category];
+	if (catConfig) category = catConfig.label;
+
+	const outputFormat = task.obsidianOutputFormat || "daily";
+	const customPath = task.obsidianOutputPath || "";
+	const weeklyFolder = task.obsidianWeeklyFolder || config.weeklyNoteFolder || "40-Life/weekly";
+
+	let outputPath: string | null = null;
+
+	if (outputFormat === "daily") {
+		outputPath = join(vaultPath, dailyFolder, `${date}.md`);
+	} else if (outputFormat === "weekly") {
+		const { year, week } = getWeekNumber(now);
+		const weekStr = week.toString().padStart(2, "0");
+		const weeklyDir = join(vaultPath, weeklyFolder, year.toString());
+		outputPath = join(weeklyDir, `${year}-W${weekStr}.md`);
+	} else if (outputFormat === "custom" && customPath) {
+		const actualPath = customPath
+			.replace(/YYYY-MM-DD/g, date)
+			.replace(/YYYY/g, date.slice(0, 4))
+			.replace(/MM/g, date.slice(5, 7))
+			.replace(/DD/g, date.slice(8, 10));
+		outputPath = join(vaultPath, actualPath);
+	}
+
+	if (!outputPath) return null;
+
+	const outputDir = dirname(outputPath);
+	const sectionTitle = `## ${category}`;
+	const entry = `- ${date}: ${output.slice(0, 2000)}\n`;
+
+	if (existsSync(outputPath)) {
+		const content = readFileSync(outputPath, "utf-8");
+		const lines = content.split("\n");
+		let sectionIdx = -1;
+		let nextIdx = lines.length;
+		for (let i = 0; i < lines.length; i++) {
+			if (lines[i].trim() === sectionTitle) sectionIdx = i;
+			else if (sectionIdx !== -1 && lines[i].startsWith("## ")) {
+				nextIdx = i;
+				break;
+			}
+		}
+		if (sectionIdx !== -1) {
+			lines.splice(nextIdx, 0, entry);
+			writeFileSync(outputPath, lines.join("\n"), "utf-8");
+		} else {
+			appendFileSync(outputPath, `\n${sectionTitle}\n\n${entry}`, "utf-8");
+		}
+	} else {
+		mkdirSync(outputDir, { recursive: true });
+		writeFileSync(outputPath, `# ${date}\n\n${sectionTitle}\n\n${entry}`, "utf-8");
+	}
+
+	return outputPath;
+}
+
+function addToHistory(history: TaskHistory) {
+	let histories: TaskHistory[] = [];
+	if (existsSync(HISTORY_FILE)) {
+		try {
+			histories = JSON.parse(readFileSync(HISTORY_FILE, "utf-8"));
+		} catch {
+			// ignore
+		}
+	}
+	histories.unshift(history);
+	histories = histories.slice(0, 100);
+	writeFileSync(HISTORY_FILE, JSON.stringify(histories, null, 2), "utf-8");
+}
+
+function loadTasks(): ScheduledTask[] {
+	if (!existsSync(TASKS_FILE)) return [];
+	try {
+		return JSON.parse(readFileSync(TASKS_FILE, "utf-8"));
+	} catch {
+		return [];
+	}
+}
+
+function saveTasks(tasks: ScheduledTask[]): void {
+	mkdirSync(SCHEDULER_DIR, { recursive: true });
+	writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2), "utf-8");
+}
+
+function generateId(): string {
+	return `task_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
 }
 
 function ensureRunnerScript(piBin: string): void {
@@ -90,204 +207,259 @@ import { join, dirname } from "node:path";
 import { homedir, platform } from "node:os";
 import { spawnSync } from "node:child_process";
 
-const tasksFile = join(homedir(), ".pi", "agent", "scheduler", "tasks.json");
-const lockFile = join(homedir(), ".pi", "agent", "scheduler", ".lock");
+const SCHEDULER_DIR = join(homedir(), ".pi", "agent", "scheduler");
+const TASKS_FILE = join(SCHEDULER_DIR, "tasks.json");
+const HISTORY_FILE = join(SCHEDULER_DIR, "history.json");
+const LOCK_FILE = join(SCHEDULER_DIR, ".lock");
 const taskId = process.argv[2];
 
 if (!taskId) {
-  console.error("Usage: node run-task.mjs <task-id>");
-  process.exit(1);
+	console.error("Usage: node run-task.mjs <task-id>");
+	process.exit(1);
 }
 
 let tasks;
 try {
-  tasks = JSON.parse(readFileSync(tasksFile, "utf-8"));
+	tasks = JSON.parse(readFileSync(TASKS_FILE, "utf-8"));
 } catch {
-  console.error("Cannot read tasks file:", tasksFile);
-  process.exit(1);
+	console.error("Cannot read tasks file:", TASKS_FILE);
+	process.exit(1);
 }
 
 const task = tasks.find((t) => t.id === taskId);
 if (!task) {
-  console.error("Task not found:", taskId);
-  process.exit(1);
+	console.error("Task not found:", taskId);
+	process.exit(1);
 }
 
 if (!task.enabled) {
-  console.log("Task is disabled, skipping:", task.name);
-  process.exit(0);
+	console.log("Task is disabled, skipping:", task.name);
+	process.exit(0);
 }
 
-function acquireLock() {
-  try {
-    if (existsSync(lockFile)) {
-      const lockTime = parseInt(readFileSync(lockFile, "utf-8"));
-      if (Date.now() - lockTime < 300000) {
-        return false;
-      }
-    }
-    writeFileSync(lockFile, Date.now().toString(), "utf-8");
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function releaseLock() {
-  try {
-    if (existsSync(lockFile)) {
-      unlinkSync(lockFile);
-    }
-  } catch {}
+function loadConfig() {
+	const configPath = join(homedir(), ".pi", "agent", "obsidian-config.json");
+	if (existsSync(configPath)) {
+		try {
+			return JSON.parse(readFileSync(configPath, "utf-8"));
+		} catch {
+			// ignore
+		}
+	}
+	return {
+		vaultPath: join(homedir(), "obsidian-vault"),
+		dailyNoteFolder: "Daily Notes",
+		weeklyNoteFolder: "40-Life/weekly",
+		categories: {},
+	};
 }
 
 function getWeekNumber(date) {
-  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-  const dayNum = d.getUTCDay() || 7;
-  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  const week = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
-  return { year: d.getUTCFullYear(), week };
+	const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+	const dayNum = d.getUTCDay() || 7;
+	d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+	const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+	const week = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+	return { year: d.getUTCFullYear(), week };
+}
+
+function acquireLock() {
+	try {
+		if (existsSync(LOCK_FILE)) {
+			const lockTime = parseInt(readFileSync(LOCK_FILE, "utf-8"));
+			if (Date.now() - lockTime < 300000) {
+				return false;
+			}
+		}
+		writeFileSync(LOCK_FILE, Date.now().toString(), "utf-8");
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function releaseLock() {
+	try {
+		if (existsSync(LOCK_FILE)) {
+			unlinkSync(LOCK_FILE);
+		}
+	} catch {}
+}
+
+function saveToObsidian(output, task, now) {
+	const config = loadConfig();
+	const vaultPath = config.vaultPath || join(homedir(), "obsidian-vault");
+	const dailyFolder = config.dailyNoteFolder || "Daily Notes";
+	const date = now.toISOString().split("T")[0];
+
+	let category = task.obsidianCategory || "work";
+	const catConfig = config.categories?.[category];
+	if (catConfig) category = catConfig.label;
+
+	const outputFormat = task.obsidianOutputFormat || "daily";
+	const customPath = task.obsidianOutputPath || "";
+	const weeklyFolder = task.obsidianWeeklyFolder || config.weeklyNoteFolder || "40-Life/weekly";
+
+	let outputPath = null;
+
+	if (outputFormat === "daily") {
+		outputPath = join(vaultPath, dailyFolder, \`\${date}.md\`);
+	} else if (outputFormat === "weekly") {
+		const { year, week } = getWeekNumber(now);
+		const weekStr = week.toString().padStart(2, "0");
+		const weeklyDir = join(vaultPath, weeklyFolder, year.toString());
+		outputPath = join(weeklyDir, \`\${year}-W\${weekStr}.md\`);
+	} else if (outputFormat === "custom" && customPath) {
+		const actualPath = customPath
+			.replace(/YYYY-MM-DD/g, date)
+			.replace(/YYYY/g, date.slice(0, 4))
+			.replace(/MM/g, date.slice(5, 7))
+			.replace(/DD/g, date.slice(8, 10));
+		outputPath = join(vaultPath, actualPath);
+	}
+
+	if (!outputPath) return null;
+
+	const outputDir = dirname(outputPath);
+	const sectionTitle = \`## \${category}\`;
+	const entry = \`- \${date}: \${output.slice(0, 2000)}\\n\`;
+
+	if (existsSync(outputPath)) {
+		const content = readFileSync(outputPath, "utf-8");
+		const lines = content.split("\\n");
+		let sectionIdx = -1;
+		let nextIdx = lines.length;
+		for (let i = 0; i < lines.length; i++) {
+			if (lines[i].trim() === sectionTitle) sectionIdx = i;
+			else if (sectionIdx !== -1 && lines[i].startsWith("## ")) {
+				nextIdx = i;
+				break;
+			}
+		}
+		if (sectionIdx !== -1) {
+			lines.splice(nextIdx, 0, entry);
+			writeFileSync(outputPath, lines.join("\\n"), "utf-8");
+		} else {
+			appendFileSync(outputPath, \`\\n\${sectionTitle}\\n\\n\${entry}\`, "utf-8");
+		}
+	} else {
+		mkdirSync(outputDir, { recursive: true });
+		writeFileSync(outputPath, \`# \${date}\\n\\n\${sectionTitle}\\n\\n\${entry}\`, "utf-8");
+	}
+
+	return outputPath;
+}
+
+function addToHistory(history) {
+	let histories = [];
+	if (existsSync(HISTORY_FILE)) {
+		try {
+			histories = JSON.parse(readFileSync(HISTORY_FILE, "utf-8"));
+		} catch {
+			// ignore
+		}
+	}
+	histories.unshift(history);
+	histories = histories.slice(0, 100);
+	writeFileSync(HISTORY_FILE, JSON.stringify(histories, null, 2), "utf-8");
 }
 
 function showNotification(title, message) {
-  try {
-    const isWindows = platform === "win32";
-    if (isWindows) {
-      const psCommand = \`[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime];\` +
-        \`$toastXml = New-Object Windows.Data.Xml.Dom.XmlDocument;\` +
-        \`$toastXml.LoadXml(@'\` +
-        \`<toast><visual><binding template="ToastGeneric"><text>\\\${title}</text><text>\\\${message}</text></binding></visual></toast>\` +
-        \`'@);\` +
-        \`$toast = New-Object Windows.UI.Notifications.ToastNotification($toastXml);\` +
-        \`[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Pi Agent').Show($toast);\`;
-      spawnSync("powershell", ["-Command", psCommand], { shell: true });
-    } else {
-      spawnSync("notify-send", [title, message], { shell: true });
-    }
-    return true;
-  } catch (err) {
-    console.error("Failed to show notification:", err.message);
-    return false;
-  }
+	try {
+		const isWindows = platform === "win32";
+		if (isWindows) {
+			const psCommand = \`[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime];\` +
+				\`$toastXml = New-Object Windows.Data.Xml.Dom.XmlDocument;\` +
+				\`$toastXml.LoadXml(@'\` +
+				\`<toast><visual><binding template="ToastGeneric"><text>\\\${title}</text><text>\\\${message}</text></binding></visual></toast>\` +
+				\`'@);\` +
+				\`$toast = New-Object Windows.UI.Notifications.ToastNotification($toastXml);\` +
+				\`[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Pi Agent').Show($toast);\`;
+			spawnSync("powershell", ["-Command", psCommand], { shell: true });
+		} else {
+			spawnSync("notify-send", [title, message], { shell: true });
+		}
+		return true;
+	} catch (err) {
+		console.error("Failed to show notification:", err.message);
+		return false;
+	}
 }
 
 if (!acquireLock()) {
-  console.warn("Another task is already running, skipping:", task.name);
-  process.exit(0);
+	console.warn("Another task is already running, skipping:", task.name);
+	process.exit(0);
 }
 
+const startTime = Date.now();
+
 try {
-  const piBin = ${JSON.stringify(piBin)};
-  const now = new Date();
-  const date = now.toISOString().split("T")[0];
-  const timestamp = now.toISOString();
+	const piBin = ${JSON.stringify(piBin)};
+	const now = new Date();
 
-  console.log(\`[\${timestamp}] Running task: \${task.name}\`);
+	console.log(\`[\${now.toISOString()}] Running task: \${task.name}\`);
 
-  let output = "";
-  let exitCode = 0;
-  let savedPath = "";
+	let output = "";
+	let exitCode = 0;
+	let savedPath = null;
 
-  const tmpPromptFile = join(homedir(), ".pi", "agent", "scheduler", "_tmp_prompt_" + taskId + ".txt");
-  try {
-    writeFileSync(tmpPromptFile, task.prompt, "utf-8");
-    const result = spawnSync(piBin, ["-p", "@" + tmpPromptFile], {
-      timeout: 300000,
-      maxBuffer: 10 * 1024 * 1024,
-      encoding: "utf-8",
-      shell: true,
-    });
+	const tmpPromptFile = join(SCHEDULER_DIR, \`_tmp_prompt_\${taskId}.txt\`);
+	try {
+		writeFileSync(tmpPromptFile, task.prompt, "utf-8");
+		const result = spawnSync(piBin, ["-p", "@" + tmpPromptFile], {
+			timeout: 300000,
+			maxBuffer: 10 * 1024 * 1024,
+			encoding: "utf-8",
+			shell: true,
+		});
 
-    output = (result.stdout || "").trim() || (result.stderr || "").trim() || "(no output)";
-    exitCode = result.status || 0;
+		output = (result.stdout || "").trim() || (result.stderr || "").trim() || "(no output)";
+		exitCode = result.status || 0;
 
-    console.log(output);
+		console.log(output);
 
-    if (task.outputToObsidian && output !== "(no output)") {
-      const configPath = join(homedir(), ".pi", "agent", "obsidian-config.json");
-      let vaultPath = join(homedir(), "obsidian-vault");
-      let dailyFolder = "Daily Notes";
-      let category = task.obsidianCategory || "work";
-      let outputFormat = task.obsidianOutputFormat || "daily";
-      let customPath = task.obsidianOutputPath || "";
+		if (task.outputToObsidian && output !== "(no output)") {
+			savedPath = saveToObsidian(output, task, now);
+			if (savedPath) {
+				console.log("Output saved to Obsidian:", savedPath);
+			}
+		}
+	} catch (err) {
+		console.error("Task execution failed:", err.message);
+		exitCode = 1;
+	} finally {
+		try { if (existsSync(tmpPromptFile)) unlinkSync(tmpPromptFile); } catch {}
+	}
 
-      try {
-        const config = JSON.parse(readFileSync(configPath, "utf-8"));
-        vaultPath = config.vaultPath || vaultPath;
-        dailyFolder = config.dailyNoteFolder || dailyFolder;
-        const catConfig = config.categories?.[category];
-        if (catConfig) category = catConfig.label;
-      } catch {}
+	const endTime = Date.now();
+	addToHistory({
+		taskId,
+		taskName: task.name,
+		timestamp: now.toISOString(),
+		status: exitCode === 0 ? "success" : "failed",
+		exitCode,
+		output: output.slice(0, 1000),
+		durationMs: endTime - startTime,
+	});
 
-      let outputPath;
+	if (task.notifyOnComplete !== false) {
+		const title = "Pi Agent - Task Completed";
+		const message = exitCode === 0
+			? \`\\\${task.name} completed successfully\${savedPath ? '\\nSaved to: ' + savedPath.split(/[/\\\\]/).pop() : ''}\`
+			: \`\\\${task.name} failed (code: \\\${exitCode})\`;
+		showNotification(title, message);
+	}
 
-      if (outputFormat === "daily") {
-        outputPath = join(vaultPath, dailyFolder, \`\${date}.md\`);
-      } else if (outputFormat === "weekly") {
-        const { year, week } = getWeekNumber(now);
-        const weekStr = week.toString().padStart(2, "0");
-        const weeklyFolder = join(vaultPath, "40-Life", "weekly", year.toString());
-        outputPath = join(weeklyFolder, \`\${year}-W\${weekStr}.md\`);
-      } else if (outputFormat === "custom" && customPath) {
-        const actualPath = customPath.replace(/YYYY-MM-DD/g, date).replace(/YYYY/g, date.slice(0, 4)).replace(/MM/g, date.slice(5, 7)).replace(/DD/g, date.slice(8, 10));
-        outputPath = join(vaultPath, actualPath);
-      }
-
-      if (outputPath) {
-        savedPath = outputPath;
-        const outputDir = dirname(outputPath);
-        const sectionTitle = \`## \${category}\`;
-        const entry = \`- \${date}: \${output.slice(0, 2000)}\\n\`;
-
-        if (existsSync(outputPath)) {
-          const content = readFileSync(outputPath, "utf-8");
-          const lines = content.split("\\n");
-          let sectionIdx = -1;
-          let nextIdx = lines.length;
-          for (let i = 0; i < lines.length; i++) {
-            if (lines[i].trim() === sectionTitle) sectionIdx = i;
-            else if (sectionIdx !== -1 && lines[i].startsWith("## ")) { nextIdx = i; break; }
-          }
-          if (sectionIdx !== -1) {
-            lines.splice(nextIdx, 0, entry);
-            writeFileSync(outputPath, lines.join("\\n"), "utf-8");
-          } else {
-            appendFileSync(outputPath, \`\\n\${sectionTitle}\\n\\n\${entry}\`, "utf-8");
-          }
-        } else {
-          mkdirSync(outputDir, { recursive: true });
-          writeFileSync(outputPath, \`# \${date}\\n\\n\${sectionTitle}\\n\\n\${entry}\`, "utf-8");
-        }
-        console.log("Output saved to Obsidian:", outputPath);
-      }
-    }
-  } catch (err) {
-    console.error("Task execution failed:", err.message);
-    exitCode = 1;
-  } finally {
-    try { if (existsSync(tmpPromptFile)) unlinkSync(tmpPromptFile); } catch {}
-  }
-
-  if (task.notifyOnComplete !== false) {
-    const title = "Pi Agent - Task Completed";
-    const message = exitCode === 0 
-      ? \`\\\${task.name} completed successfully\${savedPath ? '\\nSaved to: ' + savedPath.split('\\\\').pop() : ''}\`
-      : \`\\\${task.name} failed (code: \\\${exitCode})\`;
-    showNotification(title, message);
-  }
-
-  releaseLock();
-  process.exit(exitCode);
+	releaseLock();
+	process.exit(exitCode);
 } catch (err) {
-  releaseLock();
-  console.error("Fatal error:", err.message);
-  process.exit(1);
+	releaseLock();
+	console.error("Fatal error:", err.message);
+	process.exit(1);
 }
 `;
 
-	const needsWrite = !existsSync(RUNNER_SCRIPT) ||
-		readFileSync(RUNNER_SCRIPT, "utf-8") !== script;
+	const needsWrite = !existsSync(RUNNER_SCRIPT) || readFileSync(RUNNER_SCRIPT, "utf-8") !== script;
 
 	if (needsWrite) {
 		writeFileSync(RUNNER_SCRIPT, script, "utf-8");
@@ -295,11 +467,8 @@ try {
 
 	if (isWindows) {
 		const nodePath = process.execPath;
-		const bat = `@echo off
-"${nodePath}" "${RUNNER_SCRIPT}" %1
-`;
-		const batNeedsWrite = !existsSync(RUNNER_BAT) ||
-			readFileSync(RUNNER_BAT, "utf-8") !== bat;
+		const bat = `@echo off\n"${nodePath}" "${RUNNER_SCRIPT}" %1\n`;
+		const batNeedsWrite = !existsSync(RUNNER_BAT) || readFileSync(RUNNER_BAT, "utf-8") !== bat;
 
 		if (batNeedsWrite) {
 			writeFileSync(RUNNER_BAT, bat, "utf-8");
@@ -368,7 +537,7 @@ function parseCronForWindows(cron: string): SchtasksConfig | { error: string } {
 
 	if (isNumeric(minute) && hour.startsWith("*/") && dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
 		const interval = hour.slice(2);
-		return { schedule: "HOURLY", modifier: interval, startTime: `00:${minute.padStart(2, "0")}` };
+		return { schedule: "HOURLY", modifier: interval, startTime: `${minute.padStart(2, "0")}:00` };
 	}
 
 	if (isNumeric(minute) && isNumeric(hour) && dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
@@ -546,92 +715,41 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "scheduler_create",
 		label: "Create Scheduled Task",
-		description:
-			"Create a scheduled task that runs automatically at specified times. The task will execute a pi prompt and optionally save results to Obsidian.",
+		description: "Create a scheduled task that runs automatically at specified times.",
 		promptSnippet: "create a scheduled task that runs automatically",
 		promptGuidelines: [
 			"Use scheduler_create when the user wants to set up recurring automated tasks",
-			"Cron format: minute hour day-of-month month day-of-week (e.g., '0 9 * * *' = every day at 9:00)",
-			"Common patterns: '0 9 * * *' daily 9am, '0 9 * * 1-5' weekdays 9am, '0 20 * * *' daily 8pm",
-			"For weekly journals, set obsidian_output_format to 'weekly'",
+			"Cron format: minute hour day-of-month month day-of-week",
+			"obsidian_weekly_folder sets the folder for weekly notes (default: 40-Life/weekly)",
 		],
 		parameters: Type.Object({
 			name: Type.String({ description: "Human-readable task name" }),
-			cron: Type.String({
-				description:
-					"Cron expression (5 fields: minute hour day-of-month month day-of-week). E.g., '0 9 * * *' for daily at 9:00",
-			}),
-			prompt: Type.String({
-				description: "The prompt that pi will execute when the task runs",
-			}),
-			output_to_obsidian: Type.Optional(
-				Type.Boolean({
-					description: "Save task output to Obsidian note (default: false)",
-				}),
-			),
-			obsidian_category: Type.Optional(
-				Type.String({
-					description: "Obsidian category for output (default: work)",
-				}),
-			),
-			obsidian_output_format: Type.Optional(
-				Type.String({
-					description: "Output format: 'daily' (default), 'weekly', or 'custom'",
-					enum: ["daily", "weekly", "custom"],
-				}),
-			),
-			obsidian_output_path: Type.Optional(
-				Type.String({
-					description: "Custom output path (only when using 'custom' format)",
-				}),
-			),
-			notify_on_complete: Type.Optional(
-				Type.Boolean({
-					description: "Show system notification when task completes (default: true)",
-				}),
-			),
+			cron: Type.String({ description: "Cron expression (5 fields)" }),
+			prompt: Type.String({ description: "The prompt that pi will execute" }),
+			output_to_obsidian: Type.Optional(Type.Boolean({ description: "Save output to Obsidian" })),
+			obsidian_category: Type.Optional(Type.String({ description: "Obsidian category" })),
+			obsidian_output_format: Type.Optional(Type.String({ description: "Output format", enum: ["daily", "weekly", "custom"] })),
+			obsidian_output_path: Type.Optional(Type.String({ description: "Custom output path" })),
+			obsidian_weekly_folder: Type.Optional(Type.String({ description: "Weekly notes folder (default: 40-Life/weekly)" })),
+			notify_on_complete: Type.Optional(Type.Boolean({ description: "Show notification" })),
 		}),
 		async execute(_id, params) {
 			const tasks = loadTasks();
 
 			const existing = tasks.find((t) => t.name === params.name);
 			if (existing) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: `Task "${params.name}" already exists (ID: ${existing.id}). Use scheduler_delete first or choose a different name.`,
-						},
-					],
-					isError: true,
-				};
+				return { content: [{ type: "text", text: `Task "${params.name}" already exists.` }], isError: true };
 			}
 
 			const cronParts = params.cron.trim().split(/\s+/);
 			if (cronParts.length !== 5) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: `Invalid cron expression: "${params.cron}". Must have 5 fields: minute hour day-of-month month day-of-week\nExamples:\n- "0 9 * * *" = every day at 9:00\n- "30 8 * * 1-5" = weekdays at 8:30\n- "0 20 * * *" = every day at 20:00`,
-						},
-					],
-					isError: true,
-				};
+				return { content: [{ type: "text", text: `Invalid cron expression: "${params.cron}". Must have 5 fields.` }], isError: true };
 			}
 
 			if (isWindows) {
 				const config = parseCronForWindows(params.cron);
 				if ("error" in config) {
-					return {
-						content: [
-							{
-								type: "text",
-								text: `This cron expression is not supported on Windows: ${config.error}`,
-							},
-						],
-						isError: true,
-					};
+					return { content: [{ type: "text", text: `Cron not supported on Windows: ${config.error}` }], isError: true };
 				}
 			}
 
@@ -644,6 +762,7 @@ export default function (pi: ExtensionAPI) {
 				obsidianCategory: params.obsidian_category || "work",
 				obsidianOutputFormat: (params.obsidian_output_format as any) || "daily",
 				obsidianOutputPath: params.obsidian_output_path,
+				obsidianWeeklyFolder: params.obsidian_weekly_folder,
 				notifyOnComplete: params.notify_on_complete ?? true,
 				enabled: true,
 				createdAt: new Date().toISOString(),
@@ -654,16 +773,11 @@ export default function (pi: ExtensionAPI) {
 
 			const syncResult = await syncScheduledTasks(tasks);
 
-			const formatInfo = task.outputToObsidian ? 
-				`\nOutput format: ${task.obsidianOutputFormat || "daily"}${task.obsidianOutputFormat === "custom" ? ` (${task.obsidianOutputPath})` : ""}` : "";
-
 			return {
-				content: [
-					{
-						type: "text",
-						text: `Task created: "${task.name}" (ID: ${task.id})\nSchedule: ${task.cron}\nPrompt: ${task.prompt.slice(0, 100)}${task.prompt.length > 100 ? "..." : ""}\nOutput to Obsidian: ${task.outputToObsidian ? `Yes (${task.obsidianCategory})${formatInfo}` : "No"}\n\n${syncResult.message}`,
-					},
-				],
+				content: [{
+					type: "text",
+					text: `Task created: "${task.name}" (ID: ${task.id})\nSchedule: ${task.cron}\n${syncResult.message}`,
+				}],
 			};
 		},
 	});
@@ -671,125 +785,71 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "scheduler_list",
 		label: "List Scheduled Tasks",
-		description: "List all scheduled tasks with their status and schedule.",
+		description: "List all scheduled tasks.",
 		promptSnippet: "list all scheduled tasks",
 		parameters: Type.Object({}),
 		async execute(_id, _params) {
 			const tasks = loadTasks();
 
 			if (tasks.length === 0) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: "No scheduled tasks. Use scheduler_create to add one.",
-						},
-					],
-				};
+				return { content: [{ type: "text", text: "No scheduled tasks." }] };
 			}
 
 			const lines = tasks.map((task) => {
 				const status = task.enabled ? "✅" : "⏸️";
-				const obsidian = task.outputToObsidian 
-					? ` → Obsidian(${task.obsidianCategory}, format: ${task.obsidianOutputFormat || "daily"})` 
-					: "";
+				const obsidian = task.outputToObsidian ? ` → Obsidian(${task.obsidianCategory})` : "";
 				const notify = task.notifyOnComplete !== false ? " 🔔" : "";
 				return `${status} [${task.id}] ${task.name}${notify}\n   Schedule: ${task.cron}\n   Prompt: ${task.prompt.slice(0, 80)}${task.prompt.length > 80 ? "..." : ""}${obsidian}`;
 			});
 
-			return {
-				content: [
-					{
-						type: "text",
-						text: `Scheduled Tasks (${tasks.length}):\n\n${lines.join("\n\n")}`,
-					},
-				],
-			};
+			return { content: [{ type: "text", text: `Scheduled Tasks (${tasks.length}):\n\n${lines.join("\n\n")}` }] };
 		},
 	});
 
 	pi.registerTool({
 		name: "scheduler_delete",
 		label: "Delete Scheduled Task",
-		description: "Delete a scheduled task by name or ID.",
-		parameters: Type.Object({
-			identifier: Type.String({ description: "Task name or ID to delete" }),
-		}),
+		description: "Delete a scheduled task.",
+		parameters: Type.Object({ identifier: Type.String({ description: "Task name or ID" }) }),
 		async execute(_id, params) {
 			const tasks = loadTasks();
-			const index = tasks.findIndex(
-				(t) => t.id === params.identifier || t.name === params.identifier,
-			);
+			const index = tasks.findIndex((t) => t.id === params.identifier || t.name === params.identifier);
 
 			if (index === -1) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: `Task not found: "${params.identifier}". Use scheduler_list to see all tasks.`,
-						},
-					],
-					isError: true,
-				};
+				return { content: [{ type: "text", text: `Task not found.` }], isError: true };
 			}
 
 			const removed = tasks.splice(index, 1)[0];
 			saveTasks(tasks);
-
 			const syncResult = await syncScheduledTasks(tasks);
 
-			return {
-				content: [
-					{
-						type: "text",
-						text: `Deleted task: "${removed.name}" (${removed.id})\n${syncResult.message}`,
-					},
-				],
-			};
+			return { content: [{ type: "text", text: `Deleted task: "${removed.name}"\n${syncResult.message}` }] };
 		},
 	});
 
 	pi.registerTool({
 		name: "scheduler_run",
 		label: "Run Scheduled Task",
-		description: "Run a scheduled task immediately, regardless of its schedule.",
+		description: "Run a scheduled task immediately.",
 		promptSnippet: "run a scheduled task now",
-		parameters: Type.Object({
-			identifier: Type.String({ description: "Task name or ID to run" }),
-		}),
-		async execute(_id, params, _signal, onUpdate, ctx) {
+		parameters: Type.Object({ identifier: Type.String({ description: "Task name or ID" }) }),
+		async execute(_id, params, _signal, onUpdate) {
 			const tasks = loadTasks();
-			const task = tasks.find(
-				(t) => t.id === params.identifier || t.name === params.identifier,
-			);
+			const task = tasks.find((t) => t.id === params.identifier || t.name === params.identifier);
 
 			if (!task) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: `Task not found: "${params.identifier}". Use scheduler_list to see all tasks.`,
-						},
-					],
-					isError: true,
-				};
+				return { content: [{ type: "text", text: `Task not found.` }], isError: true };
 			}
 
 			if (!acquireLock()) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: "Another task is already running. Please try again later.",
-						},
-					],
-					isError: true,
-				};
+				return { content: [{ type: "text", text: "Another task is already running." }], isError: true };
 			}
 
 			onUpdate?.({ content: [{ type: "text", text: `Running task: ${task.name}...` }] });
 
+			const startTime = Date.now();
 			const tmpPromptFile = join(SCHEDULER_DIR, `_tmp_prompt_${task.id}.txt`);
+
 			try {
 				const { spawnSync } = await import("node:child_process");
 				writeFileSync(tmpPromptFile, task.prompt, "utf-8");
@@ -802,91 +862,34 @@ export default function (pi: ExtensionAPI) {
 
 				const output = (result.stdout || "").trim() || (result.stderr || "").trim() || "(no output)";
 				const exitCode = result.status || 0;
+				const now = new Date();
+				const endTime = Date.now();
 
 				let resultMessage = `Task "${task.name}" completed (exit code: ${exitCode}):\n\n${output.slice(0, 3000)}`;
+				let savedPath: string | null = null;
 
 				if (task.outputToObsidian && output !== "(no output)") {
-					const now = new Date();
-					const date = now.toISOString().split("T")[0];
-					const configPath = join(homedir(), ".pi", "agent", "obsidian-config.json");
-					let vaultPath = join(homedir(), "obsidian-vault");
-					let dailyFolder = "Daily Notes";
-					let category = task.obsidianCategory || "work";
-					let outputFormat = task.obsidianOutputFormat || "daily";
-					let customPath = task.obsidianOutputPath || "";
-
-					try {
-						const config = JSON.parse(readFileSync(configPath, "utf-8"));
-						vaultPath = config.vaultPath || vaultPath;
-						dailyFolder = config.dailyNoteFolder || dailyFolder;
-						const catConfig = config.categories?.[category];
-						if (catConfig) category = catConfig.label;
-					} catch {}
-
-					let outputPath;
-
-					if (outputFormat === "daily") {
-						outputPath = join(vaultPath, dailyFolder, `${date}.md`);
-					} else if (outputFormat === "weekly") {
-						const { year, week } = getWeekNumber(now);
-						const weekStr = week.toString().padStart(2, "0");
-						const weeklyFolder = join(vaultPath, "40-Life", "weekly", year.toString());
-						outputPath = join(weeklyFolder, `${year}-W${weekStr}.md`);
-					} else if (outputFormat === "custom" && customPath) {
-						const actualPath = customPath.replace(/YYYY-MM-DD/g, date).replace(/YYYY/g, date.slice(0, 4)).replace(/MM/g, date.slice(5, 7)).replace(/DD/g, date.slice(8, 10));
-						outputPath = join(vaultPath, actualPath);
-					}
-
-					if (outputPath) {
-						const outputDir = join(outputPath, "..");
-						const sectionTitle = `## ${category}`;
-						const entry = `- ${date}: ${output.slice(0, 2000)}\n`;
-
-						if (existsSync(outputPath)) {
-							const content = readFileSync(outputPath, "utf-8");
-							const lines = content.split("\n");
-							let sectionIdx = -1;
-							let nextIdx = lines.length;
-							for (let i = 0; i < lines.length; i++) {
-								if (lines[i].trim() === sectionTitle) sectionIdx = i;
-								else if (sectionIdx !== -1 && lines[i].startsWith("## ")) { nextIdx = i; break; }
-							}
-							if (sectionIdx !== -1) {
-								lines.splice(nextIdx, 0, entry);
-								writeFileSync(outputPath, lines.join("\n"), "utf-8");
-							} else {
-								appendFileSync(outputPath, `\n${sectionTitle}\n\n${entry}`, "utf-8");
-							}
-						} else {
-							mkdirSync(outputDir, { recursive: true });
-							writeFileSync(outputPath, `# ${date}\n\n${sectionTitle}\n\n${entry}`, "utf-8");
-						}
-						resultMessage += `\n\nOutput saved to: ${outputPath}`;
+					savedPath = saveToObsidian(output, task, now);
+					if (savedPath) {
+						resultMessage += `\n\nOutput saved to: ${savedPath}`;
 					}
 				}
 
-				releaseLock();
+				addToHistory({
+					taskId: task.id,
+					taskName: task.name,
+					timestamp: now.toISOString(),
+					status: exitCode === 0 ? "success" : "failed",
+					exitCode,
+					output: output.slice(0, 1000),
+					durationMs: endTime - startTime,
+				});
 
-				return {
-					content: [
-						{
-							type: "text",
-							text: resultMessage,
-						},
-					],
-					isError: exitCode !== 0,
-				};
+				releaseLock();
+				return { content: [{ type: "text", text: resultMessage }], isError: exitCode !== 0 };
 			} catch (err: any) {
 				releaseLock();
-				return {
-					content: [
-						{
-							type: "text",
-							text: `Task "${task.name}" failed: ${err.message}`,
-						},
-					],
-					isError: true,
-				};
+				return { content: [{ type: "text", text: `Task failed: ${err.message}` }], isError: true };
 			} finally {
 				try { if (existsSync(tmpPromptFile)) unlinkSync(tmpPromptFile); } catch {}
 			}
@@ -896,95 +899,62 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "scheduler_toggle",
 		label: "Toggle Scheduled Task",
-		description: "Enable or disable a scheduled task without deleting it.",
+		description: "Enable or disable a task.",
 		parameters: Type.Object({
 			identifier: Type.String({ description: "Task name or ID" }),
 			enabled: Type.Boolean({ description: "true to enable, false to disable" }),
 		}),
 		async execute(_id, params) {
 			const tasks = loadTasks();
-			const task = tasks.find(
-				(t) => t.id === params.identifier || t.name === params.identifier,
-			);
+			const task = tasks.find((t) => t.id === params.identifier || t.name === params.identifier);
 
 			if (!task) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: `Task not found: "${params.identifier}".`,
-						},
-					],
-					isError: true,
-				};
+				return { content: [{ type: "text", text: `Task not found.` }], isError: true };
 			}
 
 			task.enabled = params.enabled;
 			saveTasks(tasks);
-
 			const syncResult = await syncScheduledTasks(tasks);
 
-			return {
-				content: [
-					{
-						type: "text",
-						text: `Task "${task.name}" ${params.enabled ? "enabled" : "disabled"}.\n${syncResult.message}`,
-					},
-				],
-			};
+			return { content: [{ type: "text", text: `Task "${task.name}" ${params.enabled ? "enabled" : "disabled"}.\n${syncResult.message}` }] };
 		},
 	});
 
 	pi.registerTool({
 		name: "scheduler_update",
 		label: "Update Scheduled Task",
-		description: "Update an existing scheduled task's fields. Only provided fields will be changed.",
+		description: "Update an existing task's fields.",
 		parameters: Type.Object({
-			identifier: Type.String({ description: "Task name or ID to update" }),
-			name: Type.Optional(Type.String({ description: "New task name" })),
-			cron: Type.Optional(Type.String({ description: "New cron expression" })),
+			identifier: Type.String({ description: "Task name or ID" }),
+			name: Type.Optional(Type.String({ description: "New name" })),
+			cron: Type.Optional(Type.String({ description: "New cron" })),
 			prompt: Type.Optional(Type.String({ description: "New prompt" })),
-			output_to_obsidian: Type.Optional(Type.Boolean({ description: "Save output to Obsidian" })),
-			obsidian_category: Type.Optional(Type.String({ description: "Obsidian category" })),
-			obsidian_output_format: Type.Optional(
-				Type.String({
-					description: "Output format: 'daily', 'weekly', or 'custom'",
-					enum: ["daily", "weekly", "custom"],
-				}),
-			),
-			obsidian_output_path: Type.Optional(Type.String({ description: "Custom output path" })),
-			notify_on_complete: Type.Optional(Type.Boolean({ description: "Show notification on completion" })),
-			enabled: Type.Optional(Type.Boolean({ description: "Enable or disable the task" })),
+			output_to_obsidian: Type.Optional(Type.Boolean()),
+			obsidian_category: Type.Optional(Type.String()),
+			obsidian_output_format: Type.Optional(Type.String({ enum: ["daily", "weekly", "custom"] })),
+			obsidian_output_path: Type.Optional(Type.String()),
+			obsidian_weekly_folder: Type.Optional(Type.String()),
+			notify_on_complete: Type.Optional(Type.Boolean()),
+			enabled: Type.Optional(Type.Boolean()),
 		}),
 		async execute(_id, params) {
 			const tasks = loadTasks();
-			const task = tasks.find(
-				(t) => t.id === params.identifier || t.name === params.identifier,
-			);
+			const task = tasks.find((t) => t.id === params.identifier || t.name === params.identifier);
 
 			if (!task) {
-				return {
-					content: [{ type: "text", text: `Task not found: "${params.identifier}". Use scheduler_list to see all tasks.` }],
-					isError: true,
-				};
+				return { content: [{ type: "text", text: `Task not found.` }], isError: true };
 			}
 
 			if (params.name !== undefined) task.name = params.name;
 			if (params.cron !== undefined) {
 				const cronParts = params.cron.trim().split(/\s+/);
 				if (cronParts.length !== 5) {
-					return {
-						content: [{ type: "text", text: `Invalid cron expression: "${params.cron}". Must have 5 fields.` }],
-						isError: true,
-					};
+					return { content: [{ type: "text", text: `Invalid cron.` }], isError: true };
 				}
 				if (isWindows) {
 					const config = parseCronForWindows(params.cron);
 					if ("error" in config) {
-						return {
-							content: [{ type: "text", text: `Cron not supported on Windows: ${config.error}` }],
-							isError: true,
-						};
+						return { content: [{ type: "text", text: `Cron not supported.` }], isError: true };
 					}
 				}
 				task.cron = params.cron;
@@ -992,20 +962,54 @@ export default function (pi: ExtensionAPI) {
 			if (params.prompt !== undefined) task.prompt = params.prompt;
 			if (params.output_to_obsidian !== undefined) task.outputToObsidian = params.output_to_obsidian;
 			if (params.obsidian_category !== undefined) task.obsidianCategory = params.obsidian_category;
-			if (params.obsidian_output_format !== undefined) task.obsidianOutputFormat = params.obsidian_output_format as ScheduledTask["obsidianOutputFormat"];
+			if (params.obsidian_output_format !== undefined) task.obsidianOutputFormat = params.obsidian_output_format as any;
 			if (params.obsidian_output_path !== undefined) task.obsidianOutputPath = params.obsidian_output_path;
+			if (params.obsidian_weekly_folder !== undefined) task.obsidianWeeklyFolder = params.obsidian_weekly_folder;
 			if (params.notify_on_complete !== undefined) task.notifyOnComplete = params.notify_on_complete;
 			if (params.enabled !== undefined) task.enabled = params.enabled;
 
 			saveTasks(tasks);
 			const syncResult = await syncScheduledTasks(tasks);
 
-			return {
-				content: [{
-					type: "text",
-					text: `Task "${task.name}" updated.\nSchedule: ${task.cron}\nPrompt: ${task.prompt.slice(0, 100)}${task.prompt.length > 100 ? "..." : ""}\n${syncResult.message}`,
-				}],
-			};
+			return { content: [{ type: "text", text: `Task "${task.name}" updated.\n${syncResult.message}` }] };
+		},
+	});
+
+	pi.registerTool({
+		name: "scheduler_history",
+		label: "Task Execution History",
+		description: "View recent task execution history.",
+		promptSnippet: "view task execution history",
+		parameters: Type.Object({
+			limit: Type.Optional(Type.Number({ description: "Number of records (default: 20)" })),
+			task_id: Type.Optional(Type.String({ description: "Filter by task ID" })),
+		}),
+		async execute(_id, params) {
+			if (!existsSync(HISTORY_FILE)) {
+				return { content: [{ type: "text", text: "No execution history yet." }] };
+			}
+
+			let histories: TaskHistory[] = JSON.parse(readFileSync(HISTORY_FILE, "utf-8"));
+
+			if (params.task_id) {
+				histories = histories.filter((h) => h.taskId === params.task_id);
+			}
+
+			const limit = params.limit || 20;
+			histories = histories.slice(0, limit);
+
+			if (histories.length === 0) {
+				return { content: [{ type: "text", text: "No matching history records." }] };
+			}
+
+			const lines = histories.map((h) => {
+				const status = h.status === "success" ? "✅" : "❌";
+				const time = new Date(h.timestamp).toLocaleString("zh-CN");
+				const duration = `${h.durationMs}ms`;
+				return `${status} ${h.taskName} @ ${time}\n   Duration: ${duration}, Exit: ${h.exitCode}${h.output ? `\n   Output: ${h.output.slice(0, 100)}${h.output.length > 100 ? "..." : ""}` : ""}`;
+			});
+
+			return { content: [{ type: "text", text: `Task Execution History (${histories.length}):\n\n${lines.join("\n\n")}` }] };
 		},
 	});
 
@@ -1014,27 +1018,26 @@ export default function (pi: ExtensionAPI) {
 		async handler(args, ctx) {
 			const tasks = loadTasks();
 			if (tasks.length === 0) {
-				ctx.ui.notify("No scheduled tasks. Use scheduler_create tool to add one.", "info");
+				ctx.ui.notify("No scheduled tasks.", "info");
 				return;
 			}
 
-			const options = tasks.map(
-				(t) => `${t.enabled ? "✅" : "⏸️"} ${t.name} (${t.cron})`,
-			);
+			const options = tasks.map((t) => `${t.enabled ? "✅" : "⏸️"} ${t.name} (${t.cron})`);
+			options.push("View History");
 			options.push("↩ Cancel");
 
 			const choice = await ctx.ui.select("Scheduled Tasks", options);
 			if (!choice || choice === "↩ Cancel") return;
 
+			if (choice === "View History") {
+				pi.sendUserMessage("Show task execution history");
+				return;
+			}
+
 			const taskIndex = options.indexOf(choice);
 			const task = tasks[taskIndex];
 
-			const action = await ctx.ui.select(`Task: ${task.name}`, [
-				"Run now",
-				task.enabled ? "Disable" : "Enable",
-				"Delete",
-				"Cancel",
-			]);
+			const action = await ctx.ui.select(`Task: ${task.name}`, ["Run now", task.enabled ? "Disable" : "Enable", "Delete", "Cancel"]);
 
 			if (action === "Run now") {
 				pi.sendUserMessage(`Run scheduled task "${task.name}" now`);

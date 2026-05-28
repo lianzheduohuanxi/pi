@@ -1,16 +1,30 @@
 {
   "vaultPath": "C:\\program1\\恋着多欢喜",
   "dailyNoteFolder": "Daily Notes",
+  "weeklyNoteFolder": "40-Life/weekly",
   "categories": {
     "diet": { "label": "饮食", "emoji": "🍽️" },
     "exercise": { "label": "运动", "emoji": "🏃" },
     "learning": { "label": "学习", "emoji": "📚" },
-    "work": { "label": "工作", "emoji": "💼" }
+    "work": { "label": "工作", "emoji": "💼" },
+    "mood": { "label": "心情", "emoji": "😊" },
+    "health": { "label": "健康", "emoji": "❤️" },
+    "finance": { "label": "财务", "emoji": "💰" }
   },
   "template": "",
+  "scheduler": {
+    "enabled": true,
+    "defaultOutputFormat": "daily",
+    "defaultCategory": "work"
+  },
+  "visualization": {
+    "enabled": true,
+    "defaultDays": 7,
+    "defaultType": "bar"
+  },
   "_meta": {
-    "version": 1,
-    "lastUpdated": "2026-05-26",
+    "version": 3,
+    "lastUpdated": "2026-05-27",
     "note": "此配置文件供 AI Agent 使用，AI 应从此文件读取笔记库路径，而非硬编码或猜测"
   }
 }
