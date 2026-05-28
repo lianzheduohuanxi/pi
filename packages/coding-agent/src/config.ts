@@ -487,6 +487,16 @@ export function getAgentDir(): string {
 	if (envDir) {
 		return expandTildePath(envDir);
 	}
+
+	// Bun binary: prefer my-agent/ next to the executable (OOB config)
+	if (isBunBinary) {
+		const exeDir = dirname(process.execPath);
+		const localAgentDir = join(exeDir, "my-agent");
+		if (existsSync(join(localAgentDir, "SYSTEM.md")) || existsSync(join(localAgentDir, "AGENTS.md"))) {
+			return localAgentDir;
+		}
+	}
+
 	return join(homedir(), CONFIG_DIR_NAME, "agent");
 }
 
