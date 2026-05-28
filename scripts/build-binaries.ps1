@@ -238,8 +238,10 @@ $extDst = Join-Path $myAgentDst 'extensions'
 $extRootSrc = Join-Path $myAgentRootSrc 'extensions'
 $extDistSrc = Join-Path $myAgentDistSrc 'extensions'
 if (Test-Path $extRootSrc) {
+    Remove-Item $extDst -Force -Recurse -ErrorAction SilentlyContinue
     Copy-Item $extRootSrc $extDst -Force -Recurse
 } elseif (Test-Path $extDistSrc) {
+    Remove-Item $extDst -Force -Recurse -ErrorAction SilentlyContinue
     Copy-Item $extDistSrc $extDst -Force -Recurse
 } else {
     New-Item -ItemType Directory -Path $extDst -Force | Out-Null
@@ -251,8 +253,10 @@ $skillsDst = Join-Path $myAgentDst 'skills'
 $skillsRootSrc = Join-Path $myAgentRootSrc 'skills'
 $skillsDistSrc = Join-Path $myAgentDistSrc 'skills'
 if (Test-Path $skillsRootSrc) {
+    Remove-Item $skillsDst -Force -Recurse -ErrorAction SilentlyContinue
     Copy-Item $skillsRootSrc $skillsDst -Force -Recurse
 } elseif (Test-Path $skillsDistSrc) {
+    Remove-Item $skillsDst -Force -Recurse -ErrorAction SilentlyContinue
     Copy-Item $skillsDistSrc $skillsDst -Force -Recurse
 } else {
     New-Item -ItemType Directory -Path $skillsDst -Force | Out-Null
@@ -264,8 +268,10 @@ $promptsDst = Join-Path $myAgentDst 'prompts'
 $promptsRootSrc = Join-Path $myAgentRootSrc 'prompts'
 $promptsDistSrc = Join-Path $myAgentDistSrc 'prompts'
 if (Test-Path $promptsRootSrc) {
+    Remove-Item $promptsDst -Force -Recurse -ErrorAction SilentlyContinue
     Copy-Item $promptsRootSrc $promptsDst -Force -Recurse
 } elseif (Test-Path $promptsDistSrc) {
+    Remove-Item $promptsDst -Force -Recurse -ErrorAction SilentlyContinue
     Copy-Item $promptsDistSrc $promptsDst -Force -Recurse
 } else {
     New-Item -ItemType Directory -Path $promptsDst -Force | Out-Null
