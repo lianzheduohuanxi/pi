@@ -1,6 +1,6 @@
-import { readFileSync, appendFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from "node:fs";
+import { readFileSync, appendFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync, mkdtempSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { homedir, platform } from "node:os";
+import { homedir, platform, tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 
 const SCHEDULER_DIR = join(homedir(), ".pi", "agent", "scheduler");
@@ -33,8 +33,8 @@ if (!task.enabled) {
 	process.exit(0);
 }
 
-if (!task.prompt && !task.script) {
-	console.error("Task must have either 'prompt' or 'script' field:", task.name);
+if (!task.prompt && !task.promptFile && !task.script) {
+	console.error("Task must have either 'prompt', 'promptFile', or 'script' field:", task.name);
 	process.exit(1);
 }
 
@@ -194,8 +194,50 @@ function showNotification(title, message) {
 	}
 }
 
+const PROMPT_FILE_THRESHOLD = 4000;
+const PROMPTS_DIR = join(SCHEDULER_DIR, "prompts");
+
+function loadPromptFromFile(filePath) {
+	const resolvedPath = filePath.startsWith("~")
+		? join(homedir(), filePath.slice(1))
+		: filePath;
+	if (!existsSync(resolvedPath)) {
+		throw new Error(`Prompt file not found: ${resolvedPath}`);
+	}
+	return readFileSync(resolvedPath, "utf-8");
+}
+
+function writePromptToTempFile(prompt) {
+	if (!existsSync(PROMPTS_DIR)) {
+		mkdirSync(PROMPTS_DIR, { recursive: true });
+	}
+	const tempPath = join(PROMPTS_DIR, `${taskId}-${Date.now()}.txt`);
+	writeFileSync(tempPath, prompt, "utf-8");
+	return tempPath;
+}
+
 function executePromptMode(task) {
-	const resolvedPrompt = resolveTemplate(task.prompt);
+	let promptText;
+	if (task.promptFile) {
+		promptText = loadPromptFromFile(task.promptFile);
+	} else {
+		promptText = task.prompt;
+	}
+
+	const resolvedPrompt = resolveTemplate(promptText);
+
+	if (resolvedPrompt.length > PROMPT_FILE_THRESHOLD) {
+		const tempFile = writePromptToTempFile(resolvedPrompt);
+		console.log(`Prompt too long (${resolvedPrompt.length} chars), written to file: ${tempFile}`);
+		const wrapperPrompt = `请读取文件 ${tempFile} 的内容，并严格按照其中的指令执行。不要做任何额外操作。`;
+		return spawnSync("pi.cmd", ["-p", wrapperPrompt], {
+			timeout: 300000,
+			maxBuffer: 10 * 1024 * 1024,
+			encoding: "utf-8",
+			shell: true,
+		});
+	}
+
 	return spawnSync("pi.cmd", ["-p", resolvedPrompt], {
 		timeout: 300000,
 		maxBuffer: 10 * 1024 * 1024,
@@ -224,7 +266,8 @@ const startTime = Date.now();
 
 try {
 	const now = new Date();
-	console.log(`[${now.toISOString()}] Running task: ${task.name} (mode: ${task.script ? "script" : "prompt"})`);
+	const mode = task.script ? "script" : (task.promptFile ? "promptFile" : "prompt");
+	console.log(`[${now.toISOString()}] Running task: ${task.name} (mode: ${mode})`);
 
 	let output = "";
 	let exitCode = 0;
@@ -263,7 +306,7 @@ try {
 	addToHistory({
 		taskId,
 		taskName: task.name,
-		taskMode: task.script ? "script" : "prompt",
+		taskMode: task.script ? "script" : (task.promptFile ? "promptFile" : "prompt"),
 		timestamp: now.toISOString(),
 		status: exitCode === 0 ? "success" : "failed",
 		exitCode,
