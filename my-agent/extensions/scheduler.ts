@@ -6,7 +6,6 @@ import {
 	existsSync,
 	mkdirSync,
 	unlinkSync,
-	readdirSync,
 	appendFileSync,
 } from "node:fs";
 import { join, resolve, dirname } from "node:path";
@@ -24,7 +23,11 @@ interface ScheduledTask {
 	id: string;
 	name: string;
 	cron: string;
-	prompt: string;
+	prompt?: string;
+	promptFile?: string;
+	script?: string;
+	scriptArgs?: string[];
+	scriptInterpreter?: string;
 	outputToObsidian?: boolean;
 	obsidianCategory?: string;
 	obsidianOutputFormat?: "daily" | "weekly" | "custom" | "daily-visual" | "weekly-visual";
@@ -44,11 +47,8 @@ interface TaskHistory {
 	output?: string;
 	error?: string;
 	durationMs: number;
+	taskMode?: string;
 }
-
-// ============================================
-// 共享工具函数 - 主文件和运行器脚本共用
-// ============================================
 
 function loadConfig() {
 	const configPath = join(homedir(), ".pi", "agent", "obsidian-config.json");
@@ -199,11 +199,12 @@ function generateId(): string {
 	return `task_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
 }
 
-function resolvePrompt(prompt: string): string {
+function resolveTemplate(str: string): string {
+	if (!str) return str;
 	const now = new Date();
 	const today = now.toISOString().split("T")[0];
 	const yesterday = new Date(now.getTime() - 86400000).toISOString().split("T")[0];
-	return prompt
+	return str
 		.replace(/{{today}}/gi, today)
 		.replace(/{{yesterday}}/gi, yesterday)
 		.replace(/{{date}}/gi, today);
@@ -211,8 +212,10 @@ function resolvePrompt(prompt: string): string {
 
 function ensureRunnerScript(piBin: string): void {
 	mkdirSync(SCHEDULER_DIR, { recursive: true });
+	const PROMPTS_DIR = join(SCHEDULER_DIR, "prompts");
+	const PROMPT_FILE_THRESHOLD = 4000;
 
-	const script = `import { readFileSync, appendFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, unlinkSync } from "node:fs";
+	const script = `import { readFileSync, appendFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir, platform } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -221,6 +224,8 @@ const SCHEDULER_DIR = join(homedir(), ".pi", "agent", "scheduler");
 const TASKS_FILE = join(SCHEDULER_DIR, "tasks.json");
 const HISTORY_FILE = join(SCHEDULER_DIR, "history.json");
 const LOCK_FILE = join(SCHEDULER_DIR, ".lock");
+const PROMPTS_DIR = join(SCHEDULER_DIR, "prompts");
+const PROMPT_FILE_THRESHOLD = ${PROMPT_FILE_THRESHOLD};
 const taskId = process.argv[2];
 
 if (!taskId) {
@@ -245,6 +250,11 @@ if (!task) {
 if (!task.enabled) {
 	console.log("Task is disabled, skipping:", task.name);
 	process.exit(0);
+}
+
+if (!task.prompt && !task.promptFile && !task.script) {
+	console.error("Task must have either 'prompt', 'promptFile', or 'script' field:", task.name);
+	process.exit(1);
 }
 
 function loadConfig() {
@@ -296,14 +306,34 @@ function releaseLock() {
 	} catch {}
 }
 
-function resolvePrompt(prompt) {
+function resolveTemplate(str) {
+	if (!str) return str;
 	const now = new Date();
 	const today = now.toISOString().split("T")[0];
 	const yesterday = new Date(now.getTime() - 86400000).toISOString().split("T")[0];
-	return prompt
+	return str
 		.replace(/{{today}}/gi, today)
 		.replace(/{{yesterday}}/gi, yesterday)
 		.replace(/{{date}}/gi, today);
+}
+
+function loadPromptFromFile(filePath) {
+	const resolvedPath = filePath.startsWith("~")
+		? join(homedir(), filePath.slice(1))
+		: filePath;
+	if (!existsSync(resolvedPath)) {
+		throw new Error(\`Prompt file not found: \${resolvedPath}\`);
+	}
+	return readFileSync(resolvedPath, "utf-8");
+}
+
+function writePromptToTempFile(prompt) {
+	if (!existsSync(PROMPTS_DIR)) {
+		mkdirSync(PROMPTS_DIR, { recursive: true });
+	}
+	const tempPath = join(PROMPTS_DIR, \`\${taskId}-\${Date.now()}.txt\`);
+	writeFileSync(tempPath, prompt, "utf-8");
+	return tempPath;
 }
 
 function saveToObsidian(output, task, now) {
@@ -391,7 +421,7 @@ function showNotification(title, message) {
 			const psCommand = \`[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime];\` +
 				\`$toastXml = New-Object Windows.Data.Xml.Dom.XmlDocument;\` +
 				\`$toastXml.LoadXml(@'\` +
-				\`<toast><visual><binding template="ToastGeneric"><text>\\\${title}</text><text>\\\${message}</text></binding></visual></toast>\` +
+				\`<toast><visual><binding template="ToastGeneric"><text>\\\\\${title}</text><text>\\\\\${message}</text></binding></visual></toast>\` +
 				\`'@);\` +
 				\`$toast = New-Object Windows.UI.Notifications.ToastNotification($toastXml);\` +
 				\`[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Pi Agent').Show($toast);\`;
@@ -416,21 +446,55 @@ const startTime = Date.now();
 try {
 	const piBin = ${JSON.stringify(piBin)};
 	const now = new Date();
+	const mode = task.script ? "script" : (task.promptFile ? "promptFile" : "prompt");
 
-	console.log(\`[\${now.toISOString()}] Running task: \${task.name}\`);
+	console.log(\`[\${now.toISOString()}] Running task: \${task.name} (mode: \${mode})\`);
 
 	let output = "";
 	let exitCode = 0;
 	let savedPath = null;
 
 	try {
-		const resolvedPrompt = resolvePrompt(task.prompt);
-		const result = spawnSync(piBin, ["-p", resolvedPrompt], {
-			timeout: 300000,
-			maxBuffer: 10 * 1024 * 1024,
-			encoding: "utf-8",
-			shell: true,
-		});
+		let result;
+		
+		if (task.script) {
+			const resolvedArgs = (task.scriptArgs || []).map((a) => resolveTemplate(a));
+			const interpreter = task.scriptInterpreter || "python";
+			result = spawnSync(interpreter, [task.script, ...resolvedArgs], {
+				timeout: 300000,
+				maxBuffer: 10 * 1024 * 1024,
+				encoding: "utf-8",
+				shell: true,
+			});
+		} else {
+			let promptText;
+			if (task.promptFile) {
+				promptText = loadPromptFromFile(task.promptFile);
+			} else {
+				promptText = task.prompt;
+			}
+
+			const resolvedPrompt = resolveTemplate(promptText);
+
+			if (resolvedPrompt.length > PROMPT_FILE_THRESHOLD) {
+				const tempFile = writePromptToTempFile(resolvedPrompt);
+				console.log(\`Prompt too long (\${resolvedPrompt.length} chars), written to file: \${tempFile}\`);
+				const wrapperPrompt = \`请读取文件 \${tempFile} 的内容，并严格按照其中的指令执行。不要做任何额外操作。\`;
+				result = spawnSync(piBin, ["-p", wrapperPrompt], {
+					timeout: 300000,
+					maxBuffer: 10 * 1024 * 1024,
+					encoding: "utf-8",
+					shell: true,
+				});
+			} else {
+				result = spawnSync(piBin, ["-p", resolvedPrompt], {
+					timeout: 300000,
+					maxBuffer: 10 * 1024 * 1024,
+					encoding: "utf-8",
+					shell: true,
+				});
+			}
+		}
 
 		if (result.error) {
 			if (result.error.killed) {
@@ -462,6 +526,7 @@ try {
 	addToHistory({
 		taskId,
 		taskName: task.name,
+		taskMode: mode,
 		timestamp: now.toISOString(),
 		status: exitCode === 0 ? "success" : "failed",
 		exitCode,
@@ -484,7 +549,7 @@ try {
 	console.error("Fatal error:", err.message);
 	process.exit(1);
 }
-`;
+\`;
 
 	const needsWrite = !existsSync(RUNNER_SCRIPT) || readFileSync(RUNNER_SCRIPT, "utf-8") !== script;
 
@@ -742,17 +807,22 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "scheduler_create",
 		label: "Create Scheduled Task",
-		description: "Create a scheduled task that runs automatically at specified times.",
-		promptSnippet: "create a scheduled task that runs automatically",
+		description: "Create a scheduled task that runs automatically at specified times. Supports prompt, promptFile, and script modes.",
+		promptSnippet: "create a scheduled task",
 		promptGuidelines: [
 			"Use scheduler_create when the user wants to set up recurring automated tasks",
 			"Cron format: minute hour day-of-month month day-of-week",
 			"obsidian_weekly_folder sets the folder for weekly notes (default: 40-Life/weekly)",
+			"For long prompts (>4000 chars), use prompt_file instead of prompt to avoid command-line truncation",
 		],
 		parameters: Type.Object({
 			name: Type.String({ description: "Human-readable task name" }),
 			cron: Type.String({ description: "Cron expression (5 fields)" }),
-			prompt: Type.String({ description: "The prompt that pi will execute" }),
+			prompt: Type.Optional(Type.String({ description: "The prompt that pi will execute (for short prompts only)" })),
+			prompt_file: Type.Optional(Type.String({ description: "Path to a file containing the prompt (recommended for long prompts)" })),
+			script: Type.Optional(Type.String({ description: "Path to a Python/shell script to execute" })),
+			script_args: Type.Optional(Type.Array(Type.String()), { description: "Arguments to pass to the script" }),
+			script_interpreter: Type.Optional(Type.String({ description: "Interpreter to use for the script (default: python)" })),
 			output_to_obsidian: Type.Optional(Type.Boolean({ description: "Save output to Obsidian" })),
 			obsidian_category: Type.Optional(Type.String({ description: "Obsidian category" })),
 			obsidian_output_format: Type.Optional(Type.String({ description: "Output format", enum: ["daily", "weekly", "custom", "daily-visual", "weekly-visual"] })),
@@ -766,6 +836,10 @@ export default function (pi: ExtensionAPI) {
 			const existing = tasks.find((t) => t.name === params.name);
 			if (existing) {
 				return { content: [{ type: "text", text: `Task "${params.name}" already exists.` }], isError: true };
+			}
+
+			if (!params.prompt && !params.prompt_file && !params.script) {
+				return { content: [{ type: "text", text: "Task must have either prompt, prompt_file, or script parameter." }], isError: true };
 			}
 
 			const cronParts = params.cron.trim().split(/\s+/);
@@ -785,6 +859,10 @@ export default function (pi: ExtensionAPI) {
 				name: params.name,
 				cron: params.cron,
 				prompt: params.prompt,
+				promptFile: params.prompt_file,
+				script: params.script,
+				scriptArgs: params.script_args,
+				scriptInterpreter: params.script_interpreter,
 				outputToObsidian: params.output_to_obsidian ?? false,
 				obsidianCategory: params.obsidian_category || "work",
 				obsidianOutputFormat: (params.obsidian_output_format as any) || "daily",
@@ -824,9 +902,10 @@ export default function (pi: ExtensionAPI) {
 
 			const lines = tasks.map((task) => {
 				const status = task.enabled ? "✅" : "⏸️";
+				const mode = task.script ? "script" : (task.promptFile ? "promptFile" : "prompt");
 				const obsidian = task.outputToObsidian ? ` → Obsidian(${task.obsidianCategory})` : "";
 				const notify = task.notifyOnComplete !== false ? " 🔔" : "";
-				return `${status} [${task.id}] ${task.name}${notify}\n   Schedule: ${task.cron}\n   Prompt: ${task.prompt.slice(0, 80)}${task.prompt.length > 80 ? "..." : ""}${obsidian}`;
+				return `${status} [${task.id}] ${task.name}${notify}\n   Schedule: ${task.cron}\n   Mode: ${mode}`;
 			});
 
 			return { content: [{ type: "text", text: `Scheduled Tasks (${tasks.length}):\n\n${lines.join("\n\n")}` }] };
@@ -878,13 +957,51 @@ export default function (pi: ExtensionAPI) {
 
 			try {
 				const { spawnSync } = await import("node:child_process");
-				const resolvedPrompt = resolvePrompt(task.prompt);
-				const result = spawnSync(piBin, ["-p", resolvedPrompt], {
-					timeout: 300000,
-					maxBuffer: 10 * 1024 * 1024,
-					encoding: "utf-8",
-					shell: isWindows,
-				});
+				let result;
+				
+				if (task.script) {
+					const resolvedArgs = (task.scriptArgs || []).map((a) => resolveTemplate(a));
+					const interpreter = task.scriptInterpreter || "python";
+					result = spawnSync(interpreter, [task.script, ...resolvedArgs], {
+						timeout: 300000,
+						maxBuffer: 10 * 1024 * 1024,
+						encoding: "utf-8",
+						shell: isWindows,
+					});
+				} else {
+					let promptText;
+					if (task.promptFile) {
+						const resolvedPath = task.promptFile.startsWith("~")
+							? join(homedir(), task.promptFile.slice(1))
+							: task.promptFile;
+						promptText = readFileSync(resolvedPath, "utf-8");
+					} else {
+						promptText = task.prompt;
+					}
+
+					const resolvedPrompt = resolveTemplate(promptText);
+
+					if (resolvedPrompt.length > 4000) {
+						const PROMPTS_DIR = join(SCHEDULER_DIR, "prompts");
+						if (!existsSync(PROMPTS_DIR)) mkdirSync(PROMPTS_DIR, { recursive: true });
+						const tempPath = join(PROMPTS_DIR, `${task.id}-${Date.now()}.txt`);
+						writeFileSync(tempPath, resolvedPrompt, "utf-8");
+						const wrapperPrompt = `请读取文件 ${tempPath} 的内容，并严格按照其中的指令执行。不要做任何额外操作。`;
+						result = spawnSync(piBin, ["-p", wrapperPrompt], {
+							timeout: 300000,
+							maxBuffer: 10 * 1024 * 1024,
+							encoding: "utf-8",
+							shell: isWindows,
+						});
+					} else {
+						result = spawnSync(piBin, ["-p", resolvedPrompt], {
+							timeout: 300000,
+							maxBuffer: 10 * 1024 * 1024,
+							encoding: "utf-8",
+							shell: isWindows,
+						});
+					}
+				}
 
 				let output: string;
 				let exitCode: number;
@@ -917,6 +1034,7 @@ export default function (pi: ExtensionAPI) {
 				addToHistory({
 					taskId: task.id,
 					taskName: task.name,
+					taskMode: task.script ? "script" : (task.promptFile ? "promptFile" : "prompt"),
 					timestamp: now.toISOString(),
 					status: exitCode === 0 ? "success" : "failed",
 					exitCode,
@@ -966,6 +1084,10 @@ export default function (pi: ExtensionAPI) {
 			name: Type.Optional(Type.String({ description: "New name" })),
 			cron: Type.Optional(Type.String({ description: "New cron" })),
 			prompt: Type.Optional(Type.String({ description: "New prompt" })),
+			prompt_file: Type.Optional(Type.String({ description: "New prompt file path" })),
+			script: Type.Optional(Type.String({ description: "New script path" })),
+			script_args: Type.Optional(Type.Array(Type.String()), { description: "New script arguments" }),
+			script_interpreter: Type.Optional(Type.String({ description: "New script interpreter" })),
 			output_to_obsidian: Type.Optional(Type.Boolean()),
 			obsidian_category: Type.Optional(Type.String()),
 			obsidian_output_format: Type.Optional(Type.String({ enum: ["daily", "weekly", "custom", "daily-visual", "weekly-visual"] })),
@@ -996,7 +1118,19 @@ export default function (pi: ExtensionAPI) {
 				}
 				task.cron = params.cron;
 			}
-			if (params.prompt !== undefined) task.prompt = params.prompt;
+			if (params.prompt !== undefined) {
+				task.prompt = params.prompt;
+				if (params.prompt_file === undefined) delete task.promptFile;
+			}
+			if (params.prompt_file !== undefined) {
+				task.promptFile = params.prompt_file;
+				if (params.prompt === undefined) delete task.prompt;
+			}
+			if (params.script !== undefined) {
+				task.script = params.script;
+			}
+			if (params.script_args !== undefined) task.scriptArgs = params.script_args;
+			if (params.script_interpreter !== undefined) task.scriptInterpreter = params.script_interpreter;
 			if (params.output_to_obsidian !== undefined) task.outputToObsidian = params.output_to_obsidian;
 			if (params.obsidian_category !== undefined) task.obsidianCategory = params.obsidian_category;
 			if (params.obsidian_output_format !== undefined) task.obsidianOutputFormat = params.obsidian_output_format as any;
@@ -1043,7 +1177,8 @@ export default function (pi: ExtensionAPI) {
 				const status = h.status === "success" ? "✅" : "❌";
 				const time = new Date(h.timestamp).toLocaleString("zh-CN");
 				const duration = `${h.durationMs}ms`;
-				return `${status} ${h.taskName} @ ${time}\n   Duration: ${duration}, Exit: ${h.exitCode}${h.output ? `\n   Output: ${h.output.slice(0, 100)}${h.output.length > 100 ? "..." : ""}` : ""}`;
+				const mode = h.taskMode ? ` (${h.taskMode})` : "";
+				return `${status} ${h.taskName}${mode} @ ${time}\n   Duration: ${duration}, Exit: ${h.exitCode}${h.output ? `\n   Output: ${h.output.slice(0, 100)}${h.output.length > 100 ? "..." : ""}` : ""}`;
 			});
 
 			return { content: [{ type: "text", text: `Task Execution History (${histories.length}):\n\n${lines.join("\n\n")}` }] };
