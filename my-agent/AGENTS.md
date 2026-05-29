@@ -88,9 +88,16 @@
 | `obsidian_show_config` | 查看配置 |
 | `obsidian_summary` | 摘要 |
 | `obsidian_statistics` | 统计 |
-| `obsidian_visualize` | 可视化 |
+| `obsidian_visualize` | 可视化（图表、趋势） |
 | `obsidian_analyze` | 分析建议 |
 | `obsidian_report` | 周报/月报 |
+
+**可视化优先规则**：
+- 数据趋势分析 → 使用 `obsidian_visualize` 生成折线图/柱状图
+- 多维度对比 → 使用 `obsidian_visualize` 生成对比图表
+- 比例/占比分析 → 使用 `obsidian_visualize` 生成饼图
+- 周期性报告 → 结合 `obsidian_visualize` + `obsidian_report`
+- 分布分析 → 使用 `obsidian_visualize` 生成箱线图或直方图
 
 ---
 

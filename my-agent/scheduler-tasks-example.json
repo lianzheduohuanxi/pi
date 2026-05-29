@@ -21,5 +21,40 @@
     "notifyOnComplete": true,
     "enabled": true,
     "createdAt": "2026-05-26T09:07:08.562Z"
+  },
+  {
+    "id": "task_visual_weekly_review",
+    "name": "每周可视化报告（含图表）",
+    "cron": "0 20 * * 0",
+    "prompt": "生成本周可视化回顾报告。执行以下步骤：\n\n1. **数据收集**：使用 obsidian_read 读取本周（周一到周日）的所有每日笔记\n\n2. **分类统计**：\n   - 饮食记录：次数、类型分布\n   - 运动记录：频率、时长、类型\n   - 学习记录：时长、主题\n   - 工作记录：完成事项、待办事项\n   - 情绪记录：波动情况\n\n3. **必须可视化**（使用 obsidian_visualize）：\n   - 生成饮食分布饼图\n   - 生成运动频率柱状图\n   - 生成学习时间趋势折线图\n   - 生成情绪波动趋势图\n   - 生成工作完成率对比图\n\n4. **分析建议**：\n   - 各维度达标情况分析\n   - 发现的问题和异常\n   - 下周改进建议\n\n5. **输出格式**：\n   - 文字总结\n   - 图表展示（优先使用可视化图表）\n   - 关键指标表格\n   - 建议列表",
+    "outputToObsidian": true,
+    "obsidianCategory": "work",
+    "obsidianOutputFormat": "weekly-visual",
+    "notifyOnComplete": true,
+    "enabled": false,
+    "createdAt": "2026-05-28T00:00:00.000Z",
+    "visualization": {
+      "enabled": true,
+      "chartTypes": ["line", "bar", "pie", "area"],
+      "dimensions": ["diet", "exercise", "learning", "work", "mood"]
+    }
+  },
+  {
+    "id": "task_visual_daily_summary",
+    "name": "每日可视化总结（含图表）",
+    "cron": "0 21 * * *",
+    "prompt": "生成今日可视化总结。执行以下步骤：\n\n1. **数据收集**：使用 obsidian_read 读取今日每日笔记\n\n2. **分类总结**：\n   - 饮食情况\n   - 运动情况\n   - 学习情况\n   - 工作情况\n   - 情绪/健康情况\n\n3. **必须可视化**（使用 obsidian_visualize）：\n   - 如果有数据，生成今日各分类的简单图表\n   - 对比昨日数据（如有）\n\n4. **明日建议**：\n   - 基于今日数据给出建议\n   - 提醒未完成事项\n\n5. **输出格式**：\n   - 图表展示（优先可视化）\n   - 简短文字总结\n   - 明日待办",
+    "outputToObsidian": true,
+    "obsidianCategory": "work",
+    "obsidianOutputFormat": "daily-visual",
+    "notifyOnComplete": true,
+    "enabled": false,
+    "createdAt": "2026-05-28T00:00:00.000Z",
+    "visualization": {
+      "enabled": true,
+      "chartTypes": ["bar", "pie"],
+      "dimensions": ["diet", "exercise", "learning", "work", "mood"],
+      "compareWithYesterday": true
+    }
   }
 ]
