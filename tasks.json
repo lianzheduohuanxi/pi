@@ -1,0 +1,24 @@
+{
+  "_meta": {
+    "_comment": "本文件是 Pi Agent 定时任务配置，创建/修改任务前必读 SCHEDULER-GUIDE.md",
+    "requiredFields": ["id", "name", "cron", "enabled"],
+    "executionMode": "必须包含 prompt 或 script 字段（二选一），否则执行会崩溃",
+    "promptMode": "使用 prompt 字段，内容传给 pi.cmd -p，支持 {{today}} {{yesterday}} {{date}} 模板变量",
+    "scriptMode": "使用 script 字段（必须绝对路径）+ 可选 scriptArgs + 可选 scriptInterpreter（默认 python）",
+    "schedulerRequired": "scheduler.mjs 必须在后台运行（pm2 start），否则任务不会自动执行",
+    "guidePath": "~/.pi/agent/scheduler/SCHEDULER-GUIDE.md"
+  },
+  "tasks": [
+    {
+      "id": "task_mpqckbum_onds",
+      "name": "每日操作回顾分析",
+      "cron": "35 14 * * *",
+      "script": "C:\\Users\\LiPeiPei\\.pi\\agent\\scheduler\\daily-review.py",
+      "scriptArgs": ["{{yesterday}}"],
+      "outputToObsidian": false,
+      "notifyOnComplete": true,
+      "enabled": true,
+      "createdAt": "2026-05-29T03:13:12.958Z"
+    }
+  ]
+}
