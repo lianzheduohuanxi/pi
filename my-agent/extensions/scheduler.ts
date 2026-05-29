@@ -27,7 +27,7 @@ interface ScheduledTask {
 	prompt: string;
 	outputToObsidian?: boolean;
 	obsidianCategory?: string;
-	obsidianOutputFormat?: "daily" | "weekly" | "custom";
+	obsidianOutputFormat?: "daily" | "weekly" | "custom" | "daily-visual" | "weekly-visual";
 	obsidianOutputPath?: string;
 	obsidianWeeklyFolder?: string;
 	notifyOnComplete?: boolean;
@@ -119,9 +119,9 @@ function saveToObsidian(
 
 	let outputPath: string | null = null;
 
-	if (outputFormat === "daily") {
+	if (outputFormat === "daily" || outputFormat === "daily-visual") {
 		outputPath = join(vaultPath, dailyFolder, `${date}.md`);
-	} else if (outputFormat === "weekly") {
+	} else if (outputFormat === "weekly" || outputFormat === "weekly-visual") {
 		const { year, week } = getWeekNumber(now);
 		const weekStr = week.toString().padStart(2, "0");
 		const weeklyDir = join(vaultPath, weeklyFolder, year.toString());
@@ -197,6 +197,16 @@ function saveTasks(tasks: ScheduledTask[]): void {
 
 function generateId(): string {
 	return `task_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+}
+
+function resolvePrompt(prompt: string): string {
+	const now = new Date();
+	const today = now.toISOString().split("T")[0];
+	const yesterday = new Date(now.getTime() - 86400000).toISOString().split("T")[0];
+	return prompt
+		.replace(/{{today}}/gi, today)
+		.replace(/{{yesterday}}/gi, yesterday)
+		.replace(/{{date}}/gi, today);
 }
 
 function ensureRunnerScript(piBin: string): void {
@@ -286,6 +296,16 @@ function releaseLock() {
 	} catch {}
 }
 
+function resolvePrompt(prompt) {
+	const now = new Date();
+	const today = now.toISOString().split("T")[0];
+	const yesterday = new Date(now.getTime() - 86400000).toISOString().split("T")[0];
+	return prompt
+		.replace(/{{today}}/gi, today)
+		.replace(/{{yesterday}}/gi, yesterday)
+		.replace(/{{date}}/gi, today);
+}
+
 function saveToObsidian(output, task, now) {
 	const config = loadConfig();
 	const vaultPath = config.vaultPath || join(homedir(), "obsidian-vault");
@@ -302,9 +322,9 @@ function saveToObsidian(output, task, now) {
 
 	let outputPath = null;
 
-	if (outputFormat === "daily") {
+	if (outputFormat === "daily" || outputFormat === "daily-visual") {
 		outputPath = join(vaultPath, dailyFolder, \`\${date}.md\`);
-	} else if (outputFormat === "weekly") {
+	} else if (outputFormat === "weekly" || outputFormat === "weekly-visual") {
 		const { year, week } = getWeekNumber(now);
 		const weekStr = week.toString().padStart(2, "0");
 		const weeklyDir = join(vaultPath, weeklyFolder, year.toString());
@@ -403,18 +423,27 @@ try {
 	let exitCode = 0;
 	let savedPath = null;
 
-	const tmpPromptFile = join(SCHEDULER_DIR, \`_tmp_prompt_\${taskId}.txt\`);
 	try {
-		writeFileSync(tmpPromptFile, task.prompt, "utf-8");
-		const result = spawnSync(piBin, ["-p", "@" + tmpPromptFile], {
+		const resolvedPrompt = resolvePrompt(task.prompt);
+		const result = spawnSync(piBin, ["-p", resolvedPrompt], {
 			timeout: 300000,
 			maxBuffer: 10 * 1024 * 1024,
 			encoding: "utf-8",
 			shell: true,
 		});
 
-		output = (result.stdout || "").trim() || (result.stderr || "").trim() || "(no output)";
-		exitCode = result.status || 0;
+		if (result.error) {
+			if (result.error.killed) {
+				output = "(task timed out after 300s)";
+				exitCode = -1;
+			} else {
+				output = "(execution error: " + result.error.message + ")";
+				exitCode = 1;
+			}
+		} else {
+			output = (result.stdout || "").trim() || (result.stderr || "").trim() || "(no output)";
+			exitCode = result.status ?? 1;
+		}
 
 		console.log(output);
 
@@ -427,8 +456,6 @@ try {
 	} catch (err) {
 		console.error("Task execution failed:", err.message);
 		exitCode = 1;
-	} finally {
-		try { if (existsSync(tmpPromptFile)) unlinkSync(tmpPromptFile); } catch {}
 	}
 
 	const endTime = Date.now();
@@ -445,8 +472,8 @@ try {
 	if (task.notifyOnComplete !== false) {
 		const title = "Pi Agent - Task Completed";
 		const message = exitCode === 0
-			? \`\\\${task.name} completed successfully\${savedPath ? '\\nSaved to: ' + savedPath.split(/[/\\\\]/).pop() : ''}\`
-			: \`\\\${task.name} failed (code: \\\${exitCode})\`;
+			? \`\${task.name} completed successfully\${savedPath ? '\\nSaved to: ' + savedPath.split(/[/\\\\]/).pop() : ''}\`
+			: \`\${task.name} failed (code: \${exitCode})\`;
 		showNotification(title, message);
 	}
 
@@ -728,7 +755,7 @@ export default function (pi: ExtensionAPI) {
 			prompt: Type.String({ description: "The prompt that pi will execute" }),
 			output_to_obsidian: Type.Optional(Type.Boolean({ description: "Save output to Obsidian" })),
 			obsidian_category: Type.Optional(Type.String({ description: "Obsidian category" })),
-			obsidian_output_format: Type.Optional(Type.String({ description: "Output format", enum: ["daily", "weekly", "custom"] })),
+			obsidian_output_format: Type.Optional(Type.String({ description: "Output format", enum: ["daily", "weekly", "custom", "daily-visual", "weekly-visual"] })),
 			obsidian_output_path: Type.Optional(Type.String({ description: "Custom output path" })),
 			obsidian_weekly_folder: Type.Optional(Type.String({ description: "Weekly notes folder (default: 40-Life/weekly)" })),
 			notify_on_complete: Type.Optional(Type.Boolean({ description: "Show notification" })),
@@ -848,20 +875,32 @@ export default function (pi: ExtensionAPI) {
 			onUpdate?.({ content: [{ type: "text", text: `Running task: ${task.name}...` }] });
 
 			const startTime = Date.now();
-			const tmpPromptFile = join(SCHEDULER_DIR, `_tmp_prompt_${task.id}.txt`);
 
 			try {
 				const { spawnSync } = await import("node:child_process");
-				writeFileSync(tmpPromptFile, task.prompt, "utf-8");
-				const result = spawnSync(piBin, ["-p", "@" + tmpPromptFile], {
+				const resolvedPrompt = resolvePrompt(task.prompt);
+				const result = spawnSync(piBin, ["-p", resolvedPrompt], {
 					timeout: 300000,
 					maxBuffer: 10 * 1024 * 1024,
 					encoding: "utf-8",
 					shell: isWindows,
 				});
 
-				const output = (result.stdout || "").trim() || (result.stderr || "").trim() || "(no output)";
-				const exitCode = result.status || 0;
+				let output: string;
+				let exitCode: number;
+
+				if (result.error) {
+					if (result.error.killed) {
+						output = "(task timed out after 300s)";
+						exitCode = -1;
+					} else {
+						output = `(execution error: ${result.error.message})`;
+						exitCode = 1;
+					}
+				} else {
+					output = (result.stdout || "").trim() || (result.stderr || "").trim() || "(no output)";
+					exitCode = result.status ?? 1;
+				}
 				const now = new Date();
 				const endTime = Date.now();
 
@@ -890,8 +929,6 @@ export default function (pi: ExtensionAPI) {
 			} catch (err: any) {
 				releaseLock();
 				return { content: [{ type: "text", text: `Task failed: ${err.message}` }], isError: true };
-			} finally {
-				try { if (existsSync(tmpPromptFile)) unlinkSync(tmpPromptFile); } catch {}
 			}
 		},
 	});
@@ -931,7 +968,7 @@ export default function (pi: ExtensionAPI) {
 			prompt: Type.Optional(Type.String({ description: "New prompt" })),
 			output_to_obsidian: Type.Optional(Type.Boolean()),
 			obsidian_category: Type.Optional(Type.String()),
-			obsidian_output_format: Type.Optional(Type.String({ enum: ["daily", "weekly", "custom"] })),
+			obsidian_output_format: Type.Optional(Type.String({ enum: ["daily", "weekly", "custom", "daily-visual", "weekly-visual"] })),
 			obsidian_output_path: Type.Optional(Type.String()),
 			obsidian_weekly_folder: Type.Optional(Type.String()),
 			notify_on_complete: Type.Optional(Type.Boolean()),
