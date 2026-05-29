@@ -51,6 +51,13 @@
 }
 ```
 
+**PromptFile 模式** — 从文件读取提示词（推荐用于长指令）：
+```json
+{
+  "promptFile": "提示词文件的绝对路径，支持 ~ 开头"
+}
+```
+
 **Script 模式** — 执行 Python/Shell 脚本：
 ```json
 {
@@ -60,8 +67,9 @@
 }
 ```
 
-⚠️ **禁止**：同时缺少 `prompt` 和 `script`，这会导致执行崩溃。
+⚠️ **禁止**：同时缺少 `prompt`、`promptFile` 和 `script`，这会导致执行崩溃。
 ⚠️ **禁止**：script 模式使用相对路径，这会导致找不到脚本文件。
+⚠️ **禁止**：长 prompt 直接用 prompt 字段（超过几百字），会被 Windows cmd.exe 截断，必须用 promptFile。
 
 ### 第 3 步：验证
 
@@ -92,7 +100,8 @@ pm2 logs pi-scheduler
 | 错误现象 | 原因 | 修复 |
 |----------|------|------|
 | 任务到时间不执行 | 调度器未运行 | `pm2 start scheduler.mjs` |
-| 执行报 TypeError: Cannot read properties of undefined | 缺少 prompt/script 字段 | 添加对应字段 |
+| 执行报 TypeError: Cannot read properties of undefined | 缺少 prompt/promptFile/script 字段 | 添加对应字段 |
+| AI 收到不完整的 prompt | prompt 太长被 cmd.exe 截断 | 改用 promptFile 字段 |
 | 找不到脚本文件 | script 用了相对路径 | 改为绝对路径 |
 | 同一分钟重复执行 | state.json 损坏 | 删除 state.json 让调度器重建 |
 | 任务超时 | 执行超过 300s | 检查脚本是否有死循环 |

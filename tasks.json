@@ -2,8 +2,10 @@
   "_meta": {
     "_comment": "本文件是 Pi Agent 定时任务配置，创建/修改任务前必读 SCHEDULER-GUIDE.md",
     "requiredFields": ["id", "name", "cron", "enabled"],
-    "executionMode": "必须包含 prompt 或 script 字段（二选一），否则执行会崩溃",
+    "executionMode": "必须包含 prompt、promptFile 或 script 字段（三选一），否则执行会崩溃",
     "promptMode": "使用 prompt 字段，内容传给 pi.cmd -p，支持 {{today}} {{yesterday}} {{date}} 模板变量",
+    "promptFileMode": "使用 promptFile 字段（必须绝对路径），从文件读取 prompt，避免 Windows cmd.exe 命令行长度截断",
+    "longPromptWarning": "prompt 超过几百字时必须用 promptFile，否则会被 cmd.exe 截断导致 AI 收到不完整指令",
     "scriptMode": "使用 script 字段（必须绝对路径）+ 可选 scriptArgs + 可选 scriptInterpreter（默认 python）",
     "schedulerRequired": "scheduler.mjs 必须在后台运行（pm2 start），否则任务不会自动执行",
     "guidePath": "~/.pi/agent/scheduler/SCHEDULER-GUIDE.md"

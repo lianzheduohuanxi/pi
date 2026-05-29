@@ -94,9 +94,9 @@ pm2 logs pi-scheduler
 | `cron` | string | 5 字段 cron 表达式（分 时 日 月 周） |
 | `enabled` | boolean | 是否启用 |
 
-### 3.2 执行模式（二选一，必填其一）
+### 3.2 执行模式（三选一，必填其一）
 
-任务支持两种执行模式，**必须且只能选择一种**：
+任务支持三种执行模式，**必须且只能选择一种**：
 
 #### 模式 A：Prompt 模式 — 让 Pi CLI 执行 prompt
 
@@ -113,6 +113,8 @@ pm2 logs pi-scheduler
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `prompt` | string | **必填**。传给 `pi.cmd -p` 的提示词 |
+
+⚠️ **注意**：Windows cmd.exe 命令行长度限制约 8191 字符。如果 prompt 超过 4000 字符，系统会自动将 prompt 写入临时文件，然后让 Pi CLI 读取文件执行。但建议长 prompt 优先使用模式 C（promptFile）。
 
 #### 模式 B：Script 模式 — 执行 Python/Shell 脚本
 
@@ -132,6 +134,33 @@ pm2 logs pi-scheduler
 | `script` | string | **必填**。脚本文件的绝对路径 |
 | `scriptArgs` | string[] | 可选。传给脚本的参数列表 |
 | `scriptInterpreter` | string | 可选。解释器路径，默认 `python` |
+
+#### 模式 C：PromptFile 模式 — 从文件读取 prompt（推荐用于长指令）
+
+```json
+{
+  "id": "task_xxx_yyy",
+  "name": "每日操作回顾分析",
+  "cron": "35 14 * * *",
+  "promptFile": "C:\\Users\\xxx\\.pi\\agent\\scheduler\\prompts\\daily-review.txt",
+  "enabled": true
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `promptFile` | string | **必填**。prompt 文件的绝对路径，支持 `~` 开头 |
+
+**为什么需要 promptFile？** 当 prompt 内容较长（如包含详细步骤、API 调用说明、输出格式要求等），直接通过命令行传递会被 Windows cmd.exe 截断。promptFile 模式将详细指令写入文件，让 Pi CLI 读取文件内容执行，彻底避免截断问题。
+
+**promptFile 文件内容示例** (`daily-review.txt`)：
+```
+你是一个操作回顾分析助手。请分析 {{yesterday}} 的操作记录，完成以下任务：
+1. 读取 ~/.pi/agent/logs/{{yesterday}}.log 文件
+2. 按类别汇总操作（工作、学习、生活）
+3. 生成 Markdown 格式的回顾报告
+4. 不要调用任何外部 API
+```
 
 ### 3.3 可选字段
 
@@ -164,25 +193,31 @@ pm2 logs pi-scheduler
 **原因**：scheduler.mjs 没有在后台运行。
 **修复**：启动调度器守护进程（见步骤 1）。
 
-### ❌ 错误 2：同时缺少 prompt 和 script
+### ❌ 错误 2：同时缺少 prompt、promptFile 和 script
 
-**现象**：手动执行 run-task.mjs 报错 `Task must have either 'prompt' or 'script' field`。
-**原因**：任务配置中既没有 `prompt` 也没有 `script`。
+**现象**：手动执行 run-task.mjs 报错 `Task must have either 'prompt', 'promptFile', or 'script' field`。
+**原因**：任务配置中没有 `prompt`、`promptFile` 或 `script` 中的任何一个。
 **修复**：添加其中一个字段。
 
-### ❌ 错误 3：script 模式用了 prompt 的字段名
+### ❌ 错误 3：长 prompt 被命令行截断
+
+**现象**：AI 收到的 prompt 不完整，无法理解任务要求，输出与预期不符。
+**原因**：Windows cmd.exe 命令行长度限制约 8191 字符，长 prompt 被截断。
+**修复**：使用 `promptFile` 字段将详细指令写入文件，或系统会自动处理（超过 4000 字符自动写入临时文件）。
+
+### ❌ 错误 4：script 模式用了 prompt 的字段名
 
 **现象**：任务本意是执行脚本，但配置了 `prompt` 字段，导致 Pi CLI 尝试把脚本路径当 prompt 执行。
 **原因**：混淆了两种执行模式。
 **修复**：使用 `script` + `scriptArgs` 字段。
 
-### ❌ 错误 4：script 路径不是绝对路径
+### ❌ 错误 5：script 路径不是绝对路径
 
 **现象**：执行报错找不到脚本文件。
 **原因**：run-task.mjs 的工作目录可能不是脚本所在目录。
 **修复**：始终使用绝对路径，如 `C:\\Users\\xxx\\.pi\\agent\\scheduler\\daily-review.py`。
 
-### ❌ 错误 5：cron 表达式格式错误
+### ❌ 错误 6：cron 表达式格式错误
 
 **现象**：调度器无法匹配时间，任务永远不触发。
 **原因**：cron 表达式不是标准 5 字段格式。
@@ -197,7 +232,8 @@ pm2 logs pi-scheduler
 - [ ] 调度器 scheduler.mjs 正在后台运行
 - [ ] 任务有唯一 id
 - [ ] 任务有正确的 cron 表达式（5 字段）
-- [ ] 任务有 `prompt` 或 `script` 字段（二选一）
+- [ ] 任务有 `prompt`、`promptFile` 或 `script` 字段（三选一）
+- [ ] 如果 prompt 内容较长（超过几百字），优先使用 `promptFile` 模式
 - [ ] 如果是 script 模式，路径是绝对路径
 - [ ] 如果是 script 模式，脚本文件确实存在
 - [ ] 模板变量 `{{today}}`/`{{yesterday}}` 使用正确
