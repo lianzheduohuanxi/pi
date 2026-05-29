@@ -23,7 +23,7 @@
 - Always ask before removing functionality or code that appears intentional.
 - Do not preserve backward compatibility unless the user asks for it.
 - Never hardcode key checks (e.g. `matchesKey(keyData, "ctrl+x")`). Add defaults to `DEFAULT_EDITOR_KEYBINDINGS` or `DEFAULT_APP_KEYBINDINGS` so they stay configurable.
-- Never modify `packages/ai/src/models.generated.ts` directly; update `packages/ai/scripts/generate-models.ts` instead.
+- Never modify `packages/ai/src/models.generated.ts` directly; update `packages/ai/scripts/generate-models.ts` instead, then regenerate. Including the resulting `models.generated.ts` diff is always OK, even if regeneration includes unrelated upstream model metadata changes.
 
 ## Commands
 
@@ -74,6 +74,14 @@ If rebase conflicts occur:
 - **Binary tools**: `my-agent/bin/` contains `fd.exe` and `rg.exe` for Windows. The Obsidian extension auto-detects these.
 - **Task Scheduler**: The scheduler extension uses Windows Task Scheduler (`schtasks`) instead of crontab.
 
+When reviewing PRs:
+
+- Do not run `gh pr checkout`, `git switch`, or otherwise move the worktree to the PR branch unless the user explicitly asks.
+- Use `gh pr view`, `gh pr diff`, `gh api`, and local `git show`/`git diff` against fetched refs to inspect PR metadata, commits, and patches without changing branches.
+- If you need PR file contents, fetch/read them into temporary files or use `git show <ref>:<path>` without switching branches.
+
+When creating issues:
+
 ## Custom Extensions (my-agent/)
 
 This project includes custom extensions in `my-agent/` that are loaded when pi runs:
@@ -105,6 +113,50 @@ Rules:
 
 - All new entries go under `## [Unreleased]`. Read the full section first and append to existing subsections; never duplicate them.
 - Released version sections (e.g. `## [0.12.2]`) are immutable; never modify them.
+
+Attribution:
+
+- Internal (from issues): `Fixed foo bar ([#123](https://github.com/earendil-works/pi-mono/issues/123))`
+- External contributions: `Added feature X ([#456](https://github.com/earendil-works/pi-mono/pull/456) by [@username](https://github.com/username))`
+
+## Releasing
+
+**Lockstep versioning**: all packages share one version; every release updates all together. `patch` = fixes + additions, `minor` = breaking changes. No major releases.
+
+1. **Update CHANGELOGs**: ask the user whether they ran the `/cl` prompt on the latest commit on `main`. If not, they must run `/cl` first to audit and update each package's `[Unreleased]` section before releasing.
+
+2. **Local smoke test**: build an unpublished release and smoke test from outside the repo (so it can't resolve workspace files):
+   ```bash
+   npm run release:local -- --out /tmp/pi-local-release --force
+   cd /tmp
+
+   # Node package install smoke tests
+   /tmp/pi-local-release/node/pi --help
+   /tmp/pi-local-release/node/pi --version
+   /tmp/pi-local-release/node/pi --list-models
+   /tmp/pi-local-release/node/pi -p "Say exactly: ok"
+   /tmp/pi-local-release/node/pi
+
+   # Bun binary smoke tests
+   /tmp/pi-local-release/bun/pi --help
+   /tmp/pi-local-release/bun/pi --version
+   /tmp/pi-local-release/bun/pi --list-models
+   /tmp/pi-local-release/bun/pi -p "Say exactly: ok"
+   /tmp/pi-local-release/bun/pi
+   ```
+   Verify both Node and Bun startup, model/account listing, interactive startup, and at least one real prompt with the intended default provider. The bare commands `/tmp/pi-local-release/node/pi` and `/tmp/pi-local-release/bun/pi` start interactive mode; run each in tmux, submit a prompt, and wait for the model reply before considering the interactive smoke test passed. Failures are release blockers unless the user explicitly accepts the risk.
+
+3. **Run the release script**:
+   ```bash
+   npm run release:patch    # fixes + additions
+   npm run release:minor    # breaking changes
+   ```
+   The release script bumps all package versions, updates changelogs, regenerates release artifacts, runs `npm run check`, commits `Release vX.Y.Z`, tags `vX.Y.Z`, adds fresh `## [Unreleased]` changelog sections, commits `Add [Unreleased] section for next cycle`, then pushes `main` and the tag. Do not rerun the release script after a tag was pushed.
+
+4. **CI publishes npm packages**: pushing the `vX.Y.Z` tag triggers `.github/workflows/build-binaries.yml`. The `publish-npm` job uses npm trusted publishing through GitHub Actions OIDC with environment `npm-publish`; no local `npm publish`, `npm whoami`, OTP, or WebAuthn flow is required.
+
+5. **If CI publish fails**: inspect the failed `publish-npm` job. The publish helper is idempotent and skips package versions already present on npm, so rerun the tag workflow after fixing CI or transient npm issues. Do not rerun `npm run release:patch` or `npm run release:minor` for the same version.
+
 
 ## User Override
 
