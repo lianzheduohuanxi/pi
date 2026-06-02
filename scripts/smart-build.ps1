@@ -37,9 +37,13 @@ if ($statusLines.Count -eq 0) {
     exit 0
 }
 
-$changedFiles = foreach ($line in $statusLines) {
-    ($line -replace '^.. ').Trim()
-} | Where-Object { $_ -ne '' }
+$changedFiles = @()
+foreach ($line in $statusLines) {
+    $trimmed = ($line -replace '^.. ').Trim()
+    if ($trimmed -ne '') {
+        $changedFiles += $trimmed
+    }
+}
 
 Write-Host "==> Detected $($changedFiles.Count) changed file(s):" -ForegroundColor Cyan
 foreach ($f in $changedFiles) { Write-Host "    $f" }
@@ -111,7 +115,7 @@ if ($hasDeps) {
 elseif ($hasSrc) {
     $skipDeps     = $true
     $skipBuild    = $false
-    $skipTools    = $false
+    $skipTools    = $true
     $skipBundle   = $false
     $reason += 'package source changed — build + bundle required'
 }
@@ -119,7 +123,7 @@ elseif ($hasSrc) {
 elseif ($hasCASrc) {
     $skipDeps     = $true
     $skipBuild    = $true
-    $skipTools    = $false
+    $skipTools    = $true
     $skipBundle   = $false
     $reason += 'coding-agent source changed — bundle required'
 }

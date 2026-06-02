@@ -311,42 +311,52 @@ if (-not $SkipTools) {
     New-Item -ItemType Directory -Path $toolsBinDir -Force | Out-Null
 
     # Download fd
-    Write-Host '  Downloading fd...' -ForegroundColor Cyan
-    $fdZipDir = Join-Path $env:TEMP 'fd-download'
-    if (Test-Path $fdZipDir) { Remove-Item $fdZipDir -Recurse -Force }
-    New-Item -ItemType Directory -Path $fdZipDir -Force | Out-Null
+    $fdTarget = Join-Path $toolsBinDir 'fd.exe'
+    if (Test-Path $fdTarget) {
+        Write-Host '  fd.exe already exists, skipping download' -ForegroundColor Yellow
+    } else {
+        Write-Host '  Downloading fd...' -ForegroundColor Cyan
+        $fdZipDir = Join-Path $env:TEMP 'fd-download'
+        if (Test-Path $fdZipDir) { Remove-Item $fdZipDir -Recurse -Force }
+        New-Item -ItemType Directory -Path $fdZipDir -Force | Out-Null
 
-    gh release download -R sharkdp/fd -p 'fd-*-x86_64-pc-windows-msvc.zip' `
-        -D $fdZipDir --clobber
-    if ($LASTEXITCODE -ne 0) { throw 'fd download failed' }
+        gh release download -R sharkdp/fd -p 'fd-*-x86_64-pc-windows-msvc.zip' `
+            -D $fdZipDir --clobber
+        if ($LASTEXITCODE -ne 0) { throw 'fd download failed' }
 
-    $fdZip = Get-ChildItem (Join-Path $fdZipDir '*.zip') | Select-Object -First 1
-    $fdExtractDir = Join-Path $fdZipDir 'extracted'
-    Expand-Archive -Path $fdZip.FullName -DestinationPath $fdExtractDir -Force
-    $fdExe = Get-ChildItem -Path $fdExtractDir -Recurse -Filter 'fd.exe' |
-        Select-Object -First 1
-    if (-not $fdExe) { throw 'fd.exe not found in archive' }
-    Copy-Item $fdExe.FullName (Join-Path $toolsBinDir 'fd.exe') -Force
-    Write-Host '  fd.exe copied' -ForegroundColor Green
+        $fdZip = Get-ChildItem (Join-Path $fdZipDir '*.zip') | Select-Object -First 1
+        $fdExtractDir = Join-Path $fdZipDir 'extracted'
+        Expand-Archive -Path $fdZip.FullName -DestinationPath $fdExtractDir -Force
+        $fdExe = Get-ChildItem -Path $fdExtractDir -Recurse -Filter 'fd.exe' |
+            Select-Object -First 1
+        if (-not $fdExe) { throw 'fd.exe not found in archive' }
+        Copy-Item $fdExe.FullName $fdTarget -Force
+        Write-Host '  fd.exe copied' -ForegroundColor Green
+    }
 
     # Download rg
-    Write-Host '  Downloading rg...' -ForegroundColor Cyan
-    $rgZipDir = Join-Path $env:TEMP 'rg-download'
-    if (Test-Path $rgZipDir) { Remove-Item $rgZipDir -Recurse -Force }
-    New-Item -ItemType Directory -Path $rgZipDir -Force | Out-Null
+    $rgTarget = Join-Path $toolsBinDir 'rg.exe'
+    if (Test-Path $rgTarget) {
+        Write-Host '  rg.exe already exists, skipping download' -ForegroundColor Yellow
+    } else {
+        Write-Host '  Downloading rg...' -ForegroundColor Cyan
+        $rgZipDir = Join-Path $env:TEMP 'rg-download'
+        if (Test-Path $rgZipDir) { Remove-Item $rgZipDir -Recurse -Force }
+        New-Item -ItemType Directory -Path $rgZipDir -Force | Out-Null
 
-    gh release download -R BurntSushi/ripgrep -p 'ripgrep-*-x86_64-pc-windows-msvc.zip' `
-        -D $rgZipDir --clobber
-    if ($LASTEXITCODE -ne 0) { throw 'ripgrep download failed' }
+        gh release download -R BurntSushi/ripgrep -p 'ripgrep-*-x86_64-pc-windows-msvc.zip' `
+            -D $rgZipDir --clobber
+        if ($LASTEXITCODE -ne 0) { throw 'ripgrep download failed' }
 
-    $rgZip = Get-ChildItem (Join-Path $rgZipDir '*.zip') | Select-Object -First 1
-    $rgExtractDir = Join-Path $rgZipDir 'extracted'
-    Expand-Archive -Path $rgZip.FullName -DestinationPath $rgExtractDir -Force
-    $rgExe = Get-ChildItem -Path $rgExtractDir -Recurse -Filter 'rg.exe' |
-        Select-Object -First 1
-    if (-not $rgExe) { throw 'rg.exe not found in archive' }
-    Copy-Item $rgExe.FullName (Join-Path $toolsBinDir 'rg.exe') -Force
-    Write-Host '  rg.exe copied' -ForegroundColor Green
+        $rgZip = Get-ChildItem (Join-Path $rgZipDir '*.zip') | Select-Object -First 1
+        $rgExtractDir = Join-Path $rgZipDir 'extracted'
+        Expand-Archive -Path $rgZip.FullName -DestinationPath $rgExtractDir -Force
+        $rgExe = Get-ChildItem -Path $rgExtractDir -Recurse -Filter 'rg.exe' |
+            Select-Object -First 1
+        if (-not $rgExe) { throw 'rg.exe not found in archive' }
+        Copy-Item $rgExe.FullName $rgTarget -Force
+        Write-Host '  rg.exe copied' -ForegroundColor Green
+    }
 } else {
     Write-Host '==> Skipping tool downloads (-SkipTools)' -ForegroundColor Yellow
 }

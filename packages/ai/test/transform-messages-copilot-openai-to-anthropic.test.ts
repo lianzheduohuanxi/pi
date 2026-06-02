@@ -63,7 +63,7 @@ describe("OpenAI to Anthropic session migration for Copilot Claude", () => {
 				],
 				api: "openai-completions",
 				provider: "github-copilot",
-				model: "gpt-4o",
+				model: "claude-sonnet-4",
 				usage: {
 					input: 0,
 					output: 0,
