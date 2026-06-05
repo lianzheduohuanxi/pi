@@ -155,11 +155,11 @@ function saveToObsidian(output, task, now) {
 
 	const outputDir = dirname(outputPath);
 	const sectionTitle = `## ${category}`;
-	const entry = `- ${date}: ${output.slice(0, 2000)}\\n`;
+	const entry = `- ${date}: ${output.slice(0, 50000)}\n`;
 
 	if (existsSync(outputPath)) {
 		const content = readFileSync(outputPath, "utf-8");
-		const lines = content.split("\\n");
+		const lines = content.split("\n");
 		let sectionIdx = -1;
 		let nextIdx = lines.length;
 		for (let i = 0; i < lines.length; i++) {
@@ -171,13 +171,13 @@ function saveToObsidian(output, task, now) {
 		}
 		if (sectionIdx !== -1) {
 			lines.splice(nextIdx, 0, entry);
-			writeFileSync(outputPath, lines.join("\\n"), "utf-8");
+			writeFileSync(outputPath, lines.join("\n"), "utf-8");
 		} else {
-			appendFileSync(outputPath, `\\n${sectionTitle}\\n\\n${entry}`, "utf-8");
+			appendFileSync(outputPath, `\n${sectionTitle}\n\n${entry}`, "utf-8");
 		}
 	} else {
 		mkdirSync(outputDir, { recursive: true });
-		writeFileSync(outputPath, `# ${date}\\n\\n${sectionTitle}\\n\\n${entry}`, "utf-8");
+		writeFileSync(outputPath, `# ${date}\n\n${sectionTitle}\n\n${entry}`, "utf-8");
 	}
 
 	return outputPath;
@@ -259,22 +259,29 @@ try {
 
 			const resolvedPrompt = resolveTemplate(promptText);
 
-			if (resolvedPrompt.length > PROMPT_FILE_THRESHOLD) {
-				const tempFile = writePromptToTempFile(resolvedPrompt);
-				console.log(`Prompt too long (${resolvedPrompt.length} chars), written to file: ${tempFile}`);
+			const automationPrefix = "[自动化任务] 严格按以下指令执行。禁止提问、禁止等待用户输入、禁止请求确认。如果信息不足，使用合理的默认值继续。输出要求的内容即可。\n\n---\n\n";
+
+			// Use shell:false for absolute paths (avoids space-in-path issues on Windows),
+			// shell:true for bare commands like "pi.cmd" that need PATH lookup.
+			const useShell = !piBin.includes("/") && !piBin.includes("\\");
+
+			if (resolvedPrompt.length + automationPrefix.length > PROMPT_FILE_THRESHOLD) {
+				const fullPrompt = automationPrefix + resolvedPrompt;
+				const tempFile = writePromptToTempFile(fullPrompt);
+				console.log(`Prompt too long (${fullPrompt.length} chars), written to file: ${tempFile}`);
 				const wrapperPrompt = `请读取文件 ${tempFile} 的内容，并严格按照其中的指令执行。不要做任何额外操作。`;
 				result = spawnSync(piBin, ["-p", wrapperPrompt], {
 					timeout: 300000,
 					maxBuffer: 10 * 1024 * 1024,
 					encoding: "utf-8",
-					shell: true,
+					shell: useShell,
 				});
 			} else {
-				result = spawnSync(piBin, ["-p", resolvedPrompt], {
+				result = spawnSync(piBin, ["-p", automationPrefix + resolvedPrompt], {
 					timeout: 300000,
 					maxBuffer: 10 * 1024 * 1024,
 					encoding: "utf-8",
-					shell: true,
+					shell: useShell,
 				});
 			}
 		}

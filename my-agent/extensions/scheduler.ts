@@ -139,7 +139,7 @@ function saveToObsidian(
 
 	const outputDir = dirname(outputPath);
 	const sectionTitle = `## ${category}`;
-	const entry = `- ${date}: ${output.slice(0, 2000)}\n`;
+	const entry = `- ${date}: ${output.slice(0, 50000)}\n`;
 
 	if (existsSync(outputPath)) {
 		const content = readFileSync(outputPath, "utf-8");
@@ -227,8 +227,9 @@ function ensureRunnerScript(piBin: string): void {
 	}
 
 	if (isWindows) {
-		const nodePath = process.execPath;
-		const bat = `@echo off\n"${nodePath}" "${RUNNER_SCRIPT}" %1\n`;
+		// Use node.exe from PATH; process.execPath may point to pi.exe (Bun binary)
+		// which cannot run .mjs files as a Node.js interpreter.
+		const bat = `@echo off\nnode "${RUNNER_SCRIPT}" %1\n`;
 		const batNeedsWrite = !existsSync(RUNNER_BAT) || readFileSync(RUNNER_BAT, "utf-8") !== bat;
 
 		if (batNeedsWrite) {
@@ -329,7 +330,6 @@ async function syncWindowsTasks(tasks: ScheduledTask[]): Promise<{ success: bool
 
 	const enabledTasks = tasks.filter((t) => t.enabled);
 	const enabledIds = new Set(enabledTasks.map((t) => `PiScheduler_${t.id}`));
-	const nodePath = process.execPath;
 	const batPath = RUNNER_BAT;
 
 	let piTaskNames: string[] = [];
@@ -373,7 +373,8 @@ async function syncWindowsTasks(tasks: ScheduledTask[]): Promise<{ success: bool
 		if (batPath && existsSync(batPath)) {
 			args.push("/tr", `${batPath} ${task.id}`);
 		} else {
-			args.push("/tr", `"${nodePath}" "${RUNNER_SCRIPT}" ${task.id}`);
+			// Fallback: use node from PATH (process.execPath may be pi.exe)
+			args.push("/tr", `node "${RUNNER_SCRIPT}" ${task.id}`);
 		}
 
 		args.push("/sc", config.schedule);
@@ -414,11 +415,11 @@ async function syncWindowsTasks(tasks: ScheduledTask[]): Promise<{ success: bool
 
 async function syncCrontabTasks(tasks: ScheduledTask[]): Promise<{ success: boolean; message: string }> {
 	const enabledTasks = tasks.filter((t) => t.enabled);
-	const nodePath = process.execPath;
 	const runnerPath = RUNNER_SCRIPT;
 
+	// Use node from PATH; process.execPath may point to pi.exe (Bun binary).
 	const cronLines = enabledTasks.map((task) => {
-		return `${task.cron} ${nodePath} ${runnerPath} ${task.id} # pi-scheduler:${task.name}`;
+		return `${task.cron} node ${runnerPath} ${task.id} # pi-scheduler:${task.name}`;
 	});
 
 	const { execFile } = await import("node:child_process");
@@ -467,10 +468,18 @@ async function syncScheduledTasks(tasks: ScheduledTask[]): Promise<{ success: bo
 }
 
 export default function (pi: ExtensionAPI) {
-	const rawBin = process.env.PI_BIN || "pi";
-	const piBin = isWindows && !rawBin.endsWith(".cmd") && !rawBin.endsWith(".exe") && !rawBin.includes("/") && !rawBin.includes("\\")
-		? rawBin + ".cmd"
-		: rawBin;
+	// Resolve pi binary path for prompt-mode tasks (pi -p "prompt").
+	// Priority: PI_BIN env var > process.execPath (if pi.exe) > "pi.cmd" fallback.
+	let piBin: string;
+	if (process.env.PI_BIN) {
+		piBin = process.env.PI_BIN;
+	} else if (process.execPath && process.execPath.endsWith("pi.exe")) {
+		// Running as compiled Bun binary — use the exe itself for prompt mode
+		piBin = process.execPath;
+	} else {
+		// Running from source (node) — pi.cmd should be on PATH
+		piBin = isWindows ? "pi.cmd" : "pi";
+	}
 	ensureRunnerScript(piBin);
 
 	pi.registerTool({
@@ -650,24 +659,31 @@ export default function (pi: ExtensionAPI) {
 
 					const resolvedPrompt = resolveTemplate(promptText);
 
-					if (resolvedPrompt.length > 4000) {
+					const automationPrefix = "[自动化任务] 严格按以下指令执行。禁止提问、禁止等待用户输入、禁止请求确认。如果信息不足，使用合理的默认值继续。输出要求的内容即可。\n\n---\n\n";
+
+					// Use shell:false for absolute paths (avoids space-in-path issues on Windows),
+					// shell:true for bare commands like "pi.cmd" that need PATH lookup.
+					const useShell = !piBin.includes("/") && !piBin.includes("\\");
+
+					if (resolvedPrompt.length + automationPrefix.length > 4000) {
+						const fullPrompt = automationPrefix + resolvedPrompt;
 						const PROMPTS_DIR = join(SCHEDULER_DIR, "prompts");
 						if (!existsSync(PROMPTS_DIR)) mkdirSync(PROMPTS_DIR, { recursive: true });
 						const tempPath = join(PROMPTS_DIR, `${task.id}-${Date.now()}.txt`);
-						writeFileSync(tempPath, resolvedPrompt, "utf-8");
+						writeFileSync(tempPath, fullPrompt, "utf-8");
 						const wrapperPrompt = `请读取文件 ${tempPath} 的内容，并严格按照其中的指令执行。不要做任何额外操作。`;
 						result = spawnSync(piBin, ["-p", wrapperPrompt], {
 							timeout: 300000,
 							maxBuffer: 10 * 1024 * 1024,
 							encoding: "utf-8",
-							shell: isWindows,
+							shell: useShell,
 						});
 					} else {
-						result = spawnSync(piBin, ["-p", resolvedPrompt], {
+						result = spawnSync(piBin, ["-p", automationPrefix + resolvedPrompt], {
 							timeout: 300000,
 							maxBuffer: 10 * 1024 * 1024,
 							encoding: "utf-8",
-							shell: isWindows,
+							shell: useShell,
 						});
 					}
 				}
