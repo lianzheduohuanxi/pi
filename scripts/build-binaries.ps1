@@ -248,6 +248,20 @@ if (Test-Path $extRootSrc) {
     New-Item -ItemType File -Path (Join-Path $extDst '.gitkeep') -Force | Out-Null
 }
 
+# my-agent/lib/ - shared modules (prefer repo root, then dist)
+$libDst = Join-Path $myAgentDst 'lib'
+$libRootSrc = Join-Path $myAgentRootSrc 'lib'
+$libDistSrc = Join-Path $myAgentDistSrc 'lib'
+if (Test-Path $libRootSrc) {
+    Remove-Item $libDst -Force -Recurse -ErrorAction SilentlyContinue
+    Copy-Item $libRootSrc $libDst -Force -Recurse
+} elseif (Test-Path $libDistSrc) {
+    Remove-Item $libDst -Force -Recurse -ErrorAction SilentlyContinue
+    Copy-Item $libDistSrc $libDst -Force -Recurse
+} elseif (-not (Test-Path $libDst)) {
+    New-Item -ItemType Directory -Path $libDst -Force | Out-Null
+}
+
 # my-agent/skills/ - prefer repo root, then dist
 $skillsDst = Join-Path $myAgentDst 'skills'
 $skillsRootSrc = Join-Path $myAgentRootSrc 'skills'

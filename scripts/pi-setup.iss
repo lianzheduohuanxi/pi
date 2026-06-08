@@ -87,6 +87,9 @@ Source: "{#BinSrc}\node_modules\*"; DestDir: "{app}\node_modules"; Flags: ignore
 ; Extensions - always update with installer
 Source: "{#BinSrc}\my-agent\extensions\*"; DestDir: "{app}\my-agent\extensions"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+; Shared library modules
+Source: "{#BinSrc}\my-agent\lib\*"; DestDir: "{app}\my-agent\lib"; Flags: ignoreversion recursesubdirs createallsubdirs
+
 ; Skills - always update with installer
 Source: "{#BinSrc}\my-agent\skills\*"; DestDir: "{app}\my-agent\skills"; Flags: ignoreversion recursesubdirs createallsubdirs
 
@@ -113,6 +116,10 @@ Name: "{app}\my-agent\prompts"; Flags: uninsneveruninstall
 Name: "{app}\my-agent\themes"; Flags: uninsneveruninstall
 Name: "{app}\my-agent\tools"; Flags: uninsneveruninstall
 
+[InstallDelete]
+; Clean up stale files from previous versions
+Type: files; Name: "{app}\my-agent\extensions\obsidian-config.ts"
+
 [UninstallDelete]
 ; Only delete program-controlled items on uninstall
 Type: filesandordirs; Name: "{app}\pi.exe"
@@ -125,6 +132,7 @@ Type: filesandordirs; Name: "{app}\node_modules"
 Type: filesandordirs; Name: "{app}\docs"
 Type: filesandordirs; Name: "{app}\examples"
 Type: filesandordirs; Name: "{app}\my-agent\extensions"
+Type: filesandordirs; Name: "{app}\my-agent\lib"
 Type: filesandordirs; Name: "{app}\my-agent\skills"
 Type: filesandordirs; Name: "{app}\my-agent\bin"
 
