@@ -27,6 +27,30 @@
 - **Windows 批处理**: `~/.pi/agent/scheduler/run-task.bat`
 - **环境变量**: PI_BIN 指定 pi 命令路径
 
+### 三种执行模式
+
+| 模式 | 触发条件 | 执行方式 |
+|------|---------|---------|
+| **prompt** | `task.prompt` 存在 | `piBin -p "自动化前缀 + prompt"` |
+| **promptFile** | `task.promptFile` 存在 | 读文件内容 → 同 prompt 模式 |
+| **script** | `task.script` 存在 | `interpreter script [args]` |
+
+- prompt/promptFile 模式通过 pi agent 执行，自动使用用户当前 LLM provider
+- script 模式独立运行，不依赖 pi agent（适合纯数据处理脚本）
+- **推荐**：需要 LLM 分析的任务用 promptFile 模式，数据提取用 script 模式
+
+### PromptFile 模式模板变量
+
+- `{{yesterday}}` — 昨天日期 YYYY-MM-DD
+- `{{today}}` / `{{date}}` — 今天日期 YYYY-MM-DD
+
+### 当前任务配置
+
+- **每日项目复盘**: promptFile 模式，prompt 文件 `~/.pi/agent/scheduler/daily-review-prompt.md`
+  - 数据提取: `extract-review-data.py`（SQLite + JSONL → JSON，无 API 调用）
+  - LLM 分析: pi agent 自行完成（使用当前 provider）
+  - 输出: Obsidian Daily Notes
+
 ---
 
 ## 扩展列表
@@ -86,6 +110,10 @@
 | `obsidian_list` | 列出内容 |
 | `obsidian_config` | 配置路径 |
 | `obsidian_show_config` | 查看配置 |
+
+### 4️⃣+1 Obsidian 数据分析 ([obsidian-stats.ts](file:///workspace/my-agent/extensions/obsidian-stats.ts))
+| 工具 | 用途 |
+|------|------|
 | `obsidian_summary` | 摘要 |
 | `obsidian_statistics` | 统计 |
 | `obsidian_visualize` | 可视化（图表、趋势） |
@@ -98,6 +126,8 @@
 - 比例/占比分析 → 使用 `obsidian_visualize` 生成饼图
 - 周期性报告 → 结合 `obsidian_visualize` + `obsidian_report`
 - 分布分析 → 使用 `obsidian_visualize` 生成箱线图或直方图
+
+**共享模块**: [obsidian-config.ts](file:///workspace/my-agent/lib/obsidian-config.ts) — 统一配置加载、类型定义、通用 helpers（位于 `my-agent/lib/`，不在 extensions/ 下，避免 pi 自动加载为扩展）
 
 ---
 
@@ -142,12 +172,18 @@
 ~/.pi/agent/
 ├── obsidian-config.json    # Obsidian 配置
 ├── scheduler/
-│   ├── tasks.json         # 定时任务
-│   ├── run-task.mjs       # 运行脚本
-│   └── run-task.bat       # Windows 批处理
+│   ├── tasks.json         # 定时任务定义
+│   ├── run-task.mjs       # 运行脚本（由 pi 启动时从模板生成）
+│   ├── run-task.bat       # Windows 批处理入口
+│   ├── daily-review-prompt.md  # 每日复盘 prompt 文件
+│   ├── extract-review-data.py  # 数据提取脚本（SQLite + JSONL → JSON）
+│   ├── prompts/           # 长 prompt 临时文件
+│   ├── .lock              # 任务锁文件（防并发）
+│   └── history.json       # 执行历史（最近 100 条）
 ├── quicklog/
 │   ├── achievements.json  # 成就数据
-│   └── streaks.json       # 连续记录
+│   ├── streaks.json       # 连续记录
+│   └── total-count.json   # 累计记录总数
 ├── knowledge/
 │   └── kb.json          # 知识库索引
 └── reviews/              # 复盘历史
@@ -180,5 +216,6 @@
 - **quicklog 数据**: `~/.pi/agent/quicklog/`
 - **achievements.json**: 成就解锁状态
 - **streaks.json**: 分类连续记录天数
+- **total-count.json**: 累计记录总数（用于 achievements）
 - **knowledge/kb.json**: 知识库索引
 - **reviews/**: 每日复盘历史
