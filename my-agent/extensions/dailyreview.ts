@@ -8,8 +8,8 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { loadConfig } from "../lib/obsidian-config";
 
-const CONFIG_PATH = join(homedir(), ".pi", "agent", "obsidian-config.json");
 const REVIEW_DIR = join(homedir(), ".pi", "agent", "reviews");
 const STREAKS_FILE = join(homedir(), ".pi", "agent", "quicklog", "streaks.json");
 
@@ -29,19 +29,6 @@ interface Review {
 	productivity: number;
 }
 
-function loadConfig() {
-	if (existsSync(CONFIG_PATH)) {
-		try {
-			return JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
-		} catch {}
-	}
-	return {
-		vaultPath: join(homedir(), "obsidian-vault"),
-		dailyNoteFolder: "Daily Notes",
-		categories: {}
-	};
-}
-
 function parseDailyNote(date: string): DailyData | null {
 	const config = loadConfig();
 	const notePath = join(config.vaultPath, config.dailyNoteFolder || "Daily Notes", `${date}.md`);
@@ -54,7 +41,7 @@ function parseDailyNote(date: string): DailyData | null {
 	const categories: Record<string, { count: number; entries: string[] }> = {};
 
 	for (const [key, cat] of Object.entries(config.categories || {})) {
-		const sectionHeader = `## ${(cat as any).emoji} ${(cat as any).label}`;
+		const sectionHeader = `## ${cat.emoji} ${cat.label}`;
 		const sectionRegex = new RegExp(`${sectionHeader}[^#]*`, 's');
 		const match = content.match(sectionRegex);
 
@@ -185,6 +172,7 @@ export default function (pi: ExtensionAPI) {
 			date: Type.Optional(Type.String({ description: "要复盘的日期 (YYYY-MM-DD)，默认今天" })),
 		}),
 		async execute(_id, params) {
+			const config = loadConfig();
 			const date = params.date || new Date().toISOString().split('T')[0];
 			const data = parseDailyNote(date);
 
@@ -226,7 +214,8 @@ export default function (pi: ExtensionAPI) {
 			if (streaks.length > 0) {
 				output += `## 🔥 连续记录\n\n`;
 				streaks.slice(0, 5).forEach((s: any) => {
-					output += `${(loadConfig().categories?.[s.category]?.emoji || '📝')} ${loadConfig().categories?.[s.category]?.label || s.category}: ${s.current}天\n`;
+					const catCfg = config.categories?.[s.category];
+					output += `${catCfg?.emoji || '📝'} ${catCfg?.label || s.category}: ${s.current}天\n`;
 				});
 				output += '\n';
 			}
@@ -262,6 +251,7 @@ export default function (pi: ExtensionAPI) {
 		promptSnippet: "本周总结",
 		parameters: Type.Object({}),
 		async execute(_id, _params) {
+			const config = loadConfig();
 			const today = new Date();
 			const days: DailyData[] = [];
 
@@ -309,7 +299,7 @@ export default function (pi: ExtensionAPI) {
 
 			output += `## 📈 分类统计\n\n`;
 			for (const [cat, count] of Object.entries(catStats)) {
-				const catConfig = loadConfig().categories?.[cat];
+				const catConfig = config.categories?.[cat];
 				const emoji = catConfig?.emoji || '📝';
 				const name = catConfig?.label || cat;
 				output += `${emoji} ${name}：${count} 条记录\n`;

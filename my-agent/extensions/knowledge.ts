@@ -5,11 +5,12 @@ import {
 	writeFileSync,
 	existsSync,
 	mkdirSync,
+	readdirSync,
 } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { loadConfig } from "../lib/obsidian-config";
 
-const CONFIG_PATH = join(homedir(), ".pi", "agent", "obsidian-config.json");
 const KNOWLEDGE_DIR = join(homedir(), ".pi", "agent", "knowledge");
 
 interface Note {
@@ -49,19 +50,6 @@ const KEYWORDS = [
 	{ word: '会议', tags: ['work', 'meeting'] },
 	{ word: '想法', tags: ['idea', 'thinking'] },
 ];
-
-function loadConfig() {
-	if (existsSync(CONFIG_PATH)) {
-		try {
-			return JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
-		} catch {}
-	}
-	return {
-		vaultPath: join(homedir(), "obsidian-vault"),
-		dailyNoteFolder: "Daily Notes",
-		categories: {}
-	};
-}
 
 function loadKnowledgeBase(): KnowledgeBase {
 	mkdirSync(KNOWLEDGE_DIR, { recursive: true });
@@ -117,7 +105,7 @@ function parseNote(path: string): Note | null {
 	const config = loadConfig();
 
 	for (const [key, cat] of Object.entries(config.categories || {})) {
-		if (content.includes((cat as any).label)) {
+		if (content.includes(cat.label)) {
 			categories.push(key);
 		}
 	}
@@ -134,6 +122,10 @@ function parseNote(path: string): Note | null {
 
 function buildRelations(kb: KnowledgeBase): void {
 	kb.relations = [];
+
+	if (kb.notes.length > 500) {
+		return;
+	}
 
 	for (let i = 0; i < kb.notes.length; i++) {
 		for (let j = i + 1; j < kb.notes.length; j++) {
@@ -179,7 +171,6 @@ function scanDailyNotes(): Note[] {
 		return notes;
 	}
 
-	const { readdirSync } = require('node:fs');
 	const files = readdirSync(dailyFolder);
 
 	files.forEach((file: string) => {

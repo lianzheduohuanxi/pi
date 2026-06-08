@@ -12,6 +12,7 @@ import { homedir } from "node:os";
 const REMINDER_DIR = join(homedir(), ".pi", "agent", "reminders");
 const REMINDERS_FILE = join(REMINDER_DIR, "reminders.json");
 const CONFIG_PATH = join(homedir(), ".pi", "agent", "obsidian-config.json");
+const TIME_WINDOW_MINUTES = 30;
 
 interface Reminder {
 	id: string;
@@ -136,8 +137,10 @@ function getDefaultReminders(): Reminder[] {
 
 function checkTimeCondition(timeStr: string): boolean {
 	const now = new Date();
-	const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-	return currentTime === timeStr;
+	const currentMinutes = now.getHours() * 60 + now.getMinutes();
+	const [targetHour, targetMin] = timeStr.split(':').map(Number);
+	const targetMinutes = targetHour * 60 + (targetMin || 0);
+	return currentMinutes >= targetMinutes && currentMinutes < targetMinutes + TIME_WINDOW_MINUTES;
 }
 
 function getCategoryCount(category: string, days: number = 1): number {

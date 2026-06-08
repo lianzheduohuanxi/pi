@@ -5,15 +5,15 @@ import {
 	writeFileSync,
 	existsSync,
 	mkdirSync,
-	appendFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { loadConfig } from "../lib/obsidian-config";
 
-const CONFIG_PATH = join(homedir(), ".pi", "agent", "obsidian-config.json");
 const QUICKLOG_DIR = join(homedir(), ".pi", "agent", "quicklog");
 const ACHIEVEMENTS_FILE = join(QUICKLOG_DIR, "achievements.json");
 const STREAKS_FILE = join(QUICKLOG_DIR, "streaks.json");
+const TOTAL_COUNT_FILE = join(QUICKLOG_DIR, "total-count.json");
 
 const EMOTION_MAP: Record<string, string> = {
 	'😊': 'mood:开心',
@@ -80,19 +80,6 @@ interface Streak {
 	lastDate: string;
 }
 
-function loadConfig() {
-	if (existsSync(CONFIG_PATH)) {
-		try {
-			return JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
-		} catch {}
-	}
-	return {
-		vaultPath: join(homedir(), "obsidian-vault"),
-		dailyNoteFolder: "Daily Notes",
-		categories: {}
-	};
-}
-
 function getTodayNotePath(): string {
 	const config = loadConfig();
 	const today = new Date().toISOString().split('T')[0];
@@ -145,7 +132,7 @@ function saveToObsidian(log: QuickLog): string {
 	const sectionHeader = catConfig ? `## ${catConfig.emoji} ${catConfig.label}` : `## ${log.category}`;
 
 	const timeStr = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-	const logLine = `- ${timeStr} ${log.emotion || ''} ${log.content} ${log.tags.map(t => `#${t}`).join(' ')}\n`;
+	const logLine = `- ${timeStr} ${log.emotion || ''} ${log.content} ${log.tags.map(t => `#${t}`).join(' ')}`;
 
 	if (!existsSync(notePath)) {
 		mkdirSync(join(notePath, '..'), { recursive: true });
@@ -153,31 +140,48 @@ function saveToObsidian(log: QuickLog): string {
 		writeFileSync(notePath, header, 'utf-8');
 	}
 
-	let content = readFileSync(notePath, 'utf-8');
+	const content = readFileSync(notePath, 'utf-8');
+	const lines = content.split('\n');
 
-	// 检查是否有对应分类的章节
-	if (!content.includes(sectionHeader)) {
-		content += `\n${sectionHeader}\n\n`;
-	}
+	// Find the section header line
+	let sectionStart = -1;
+	let nextSectionStart = lines.length;
 
-	// 在对应章节添加记录
-	const sectionRegex = new RegExp(`(${sectionHeader}[^#]*)(?:\\n## |$)`, 's');
-	const match = content.match(sectionRegex);
-
-	if (match) {
-		const sectionContent = match[1];
-		if (sectionContent.trim().endsWith('\n')) {
-			content = content.replace(match[1], sectionContent + logLine);
-		} else {
-			content = content.replace(match[1], sectionContent + '\n' + logLine);
+	for (let i = 0; i < lines.length; i++) {
+		if (lines[i].trim() === sectionHeader.trim()) {
+			sectionStart = i;
+		} else if (sectionStart !== -1 && /^## /.test(lines[i])) {
+			nextSectionStart = i;
+			break;
 		}
-	} else {
-		content += logLine;
 	}
 
-	writeFileSync(notePath, content, 'utf-8');
+	if (sectionStart === -1) {
+		// Section doesn't exist yet — append it
+		lines.push('');
+		lines.push(sectionHeader);
+		lines.push('');
+		lines.push(logLine);
+	} else {
+		// Find the last non-empty line within the section (before next section)
+		let insertAt = nextSectionStart;
+		// Walk backwards from nextSectionStart to find last content line in section
+		for (let i = nextSectionStart - 1; i > sectionStart; i--) {
+			if (lines[i].trim() !== '') {
+				insertAt = i + 1;
+				break;
+			}
+		}
+		if (insertAt === nextSectionStart && insertAt > sectionStart + 1) {
+			// All lines between sectionStart and nextSectionStart are empty
+			insertAt = sectionStart + 1;
+		}
+		lines.splice(insertAt, 0, logLine);
+	}
 
-	return `记录成功！${log.emotion || ''} ${content.slice(0, 50)}`;
+	writeFileSync(notePath, lines.join('\n'), 'utf-8');
+
+	return `记录成功！${log.emotion || ''} ${logLine.slice(0, 50)}`;
 }
 
 function updateStreaks(category: string): void {
@@ -229,6 +233,23 @@ function saveAchievements(achievements: Achievement[]): void {
 	writeFileSync(ACHIEVEMENTS_FILE, JSON.stringify(achievements, null, 2), 'utf-8');
 }
 
+function loadTotalCount(): number {
+	if (existsSync(TOTAL_COUNT_FILE)) {
+		try {
+			const data = JSON.parse(readFileSync(TOTAL_COUNT_FILE, 'utf-8'));
+			return data.count ?? 0;
+		} catch {}
+	}
+	return 0;
+}
+
+function incrementTotalCount(): number {
+	mkdirSync(QUICKLOG_DIR, { recursive: true });
+	const count = loadTotalCount() + 1;
+	writeFileSync(TOTAL_COUNT_FILE, JSON.stringify({ count }), 'utf-8');
+	return count;
+}
+
 function getDefaultAchievements(): Achievement[] {
 	return [
 		{ id: 'first_log', name: '初次记录', description: '开始记录的第一步！', icon: '🌟', condition: 'records_1' },
@@ -257,6 +278,9 @@ function checkAchievements(category: string): Achievement[] {
 			if (streak && streak.current >= target) unlock = true;
 		} else if (a.condition === 'categories_5') {
 			if (streaks.length >= 5) unlock = true;
+		} else if (a.condition === 'records_100') {
+			const totalCount = loadTotalCount();
+			if (totalCount >= 100) unlock = true;
 		}
 
 		if (unlock) {
@@ -285,6 +309,7 @@ export default function (pi: ExtensionAPI) {
 			const log = parseQuickLog(params.content);
 			const result = saveToObsidian(log);
 
+			incrementTotalCount();
 			updateStreaks(log.category);
 			const unlocked = checkAchievements(log.category);
 
