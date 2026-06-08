@@ -89,10 +89,16 @@ This project includes custom extensions in `my-agent/` that are loaded when pi r
 - **`my-agent/SYSTEM.md`**: System prompt for the personal AI assistant (Obsidian, scheduling, English tutoring)
 - **`my-agent/AGENTS.md`**: Runtime context for the agent (user preferences, tool usage rules)
 - **`my-agent/extensions/obsidian.ts`**: Obsidian vault integration (read/write/search/record)
+- **`my-agent/extensions/obsidian-stats.ts`**: Obsidian analytics (statistics, visualization, reports)
 - **`my-agent/extensions/scheduler.ts`**: Scheduled task management (Windows Task Scheduler + crontab)
+- **`my-agent/extensions/run-task-template.mjs`**: Template for the task runner script (`run-task.mjs` is generated from this at pi startup)
+- **`my-agent/lib/`**: Shared modules (not auto-loaded by pi, imported by extensions)
+  - **`my-agent/lib/obsidian-config.ts`**: Shared Obsidian config types and helpers
 - **`my-agent/skills/`**: On-demand skill definitions (diet, exercise, learning, work tracking)
 - **`my-agent/prompts/`**: Reusable prompt templates (daily-summary, weekly-review)
 - **`my-agent/bin/`**: Windows binaries (fd.exe, rg.exe)
+
+**Important**: Files in `my-agent/extensions/` ending in `.ts` are auto-loaded as extensions by pi. Shared modules that are NOT extensions must live in `my-agent/lib/` instead.
 
 When modifying extensions, run `npm run check` from root and test with `pi-test.ps1`.
 
@@ -204,3 +210,18 @@ if (isBunBinary) {
 - `auth.json`、`settings.json`、`models.json`、`oauth.json` — 永不覆盖（由 ISS `[Dirs]` 的 `uninsneveruninstall` 保护）
 
 修改 ISS 脚本时，不要将这些标志改为 `ignoreversion`，否则会覆盖用户数据。
+
+### spawnSync shell:true with Paths Containing Spaces
+
+In `scheduler.ts` and `run-task-template.mjs`, when using `spawnSync(piBin, [...], { shell: ... })`:
+
+- **Problem**: `shell: true` with paths containing spaces (e.g. `C:\...\Pi Agent\pi.exe`) causes `cmd.exe` to split the path at the space, resulting in "not recognized" errors.
+- **Fix**: Use `shell: false` for absolute paths (no PATH lookup needed), `shell: true` only for bare commands like `"pi.cmd"` that need PATH resolution.
+
+```javascript
+// Correct pattern:
+const useShell = !piBin.includes("/") && !piBin.includes("\\");
+result = spawnSync(piBin, ["-p", prompt], { shell: useShell, ... });
+```
+
+**Check rule**: When modifying any `spawnSync` call that takes an absolute executable path, ensure `shell` is `false` (or conditionally `false` for absolute paths). Never use `shell: true` with hardcoded Windows paths that may contain spaces.

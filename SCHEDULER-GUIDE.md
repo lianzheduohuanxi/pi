@@ -185,13 +185,49 @@ pm2 logs pi-scheduler
 
 ---
 
-## 4. 常见错误与检查清单
+## 4. 模式选择建议
+
+### 推荐优先级
+
+1. **Script 模式（首选）** — 可靠性最高，适合数据收集、API 调用、文件操作等确定性任务
+2. **PromptFile 模式（次选）** — 需要 LLM 判断时使用，但 prompt 必须具体明确
+3. **Prompt 模式（不推荐）** — 短文本可用，但容易因指令模糊导致 AI 自由发挥
+
+### 自动化约束
+
+所有 prompt/promptFile 模式的任务会自动添加前缀：
+
+```
+[自动化任务] 严格按以下指令执行。禁止提问、禁止等待用户输入、禁止请求确认。
+如果信息不足，使用合理的默认值继续。输出要求的内容即可。
+```
+
+这确保无人值守时 AI 不会反问用户。
+
+### 敏感配置
+
+脚本中的 API key、密码等敏感信息**禁止硬编码**，必须从环境变量读取：
+
+```python
+# 正确
+API_KEY = os.environ.get('MINIMAX_API_KEY')
+if not API_KEY:
+    print("Error: MINIMAX_API_KEY not set", file=sys.stderr)
+    sys.exit(1)
+
+# 错误 — 不要这样做
+API_KEY = os.environ.get('MINIMAX_API_KEY', 'sk-xxx...')
+```
+
+---
+
+## 5. 常见错误与检查清单
 
 ### ❌ 错误 1：没有启动调度器
 
 **现象**：任务配置正确，但到时间不执行。
 **原因**：scheduler.mjs 没有在后台运行。
-**修复**：启动调度器守护进程（见步骤 1）。
+**修复**：启动调度器守护进程（见步骤 1），或使用 Windows Task Scheduler 原生触发（`scheduler_create` 工具会自动同步到 schtasks）。
 
 ### ❌ 错误 2：同时缺少 prompt、promptFile 和 script
 
@@ -223,22 +259,34 @@ pm2 logs pi-scheduler
 **原因**：cron 表达式不是标准 5 字段格式。
 **修复**：使用 `分 时 日 月 周` 格式，如 `0 9 * * *`（每天 9:00）。
 
+### ❌ 错误 7：AI 在定时任务中反问用户
+
+**现象**：prompt/promptFile 模式的任务执行后输出的是问题列表而非结果。
+**原因**：prompt 指令不够具体，AI 进入了对话模式。
+**修复**：系统已自动添加"禁止提问"前缀。确保 prompt 内容具体明确、步骤清晰。
+
+### ❌ 错误 8：脚本硬编码敏感信息
+
+**现象**：API key、密码等泄露到日志、session 记录或 git 中。
+**原因**：脚本中 fallback 值包含明文密钥。
+**修复**：所有敏感信息从环境变量读取，缺失时直接报错退出。
+
 ---
 
 ## 5. 创建任务前的自检清单
 
 在写入 tasks.json 之前，逐项确认：
 
-- [ ] 调度器 scheduler.mjs 正在后台运行
+- [ ] 调度器 scheduler.mjs 正在后台运行（或已通过 schtasks/crontab 注册）
 - [ ] 任务有唯一 id
 - [ ] 任务有正确的 cron 表达式（5 字段）
 - [ ] 任务有 `prompt`、`promptFile` 或 `script` 字段（三选一）
-- [ ] 如果 prompt 内容较长（超过几百字），优先使用 `promptFile` 模式
+- [ ] 优先使用 script 模式（可靠性最高）；需要 LLM 时使用 promptFile 模式
 - [ ] 如果是 script 模式，路径是绝对路径
 - [ ] 如果是 script 模式，脚本文件确实存在
+- [ ] 脚本中无硬编码敏感信息（API key 等必须从环境变量读取）
 - [ ] 模板变量 `{{today}}`/`{{yesterday}}` 使用正确
 - [ ] 已手动执行 `node run-task.mjs <taskId>` 验证通过
-- [ ] 已检查调度器日志确认新任务被识别
 
 ---
 
